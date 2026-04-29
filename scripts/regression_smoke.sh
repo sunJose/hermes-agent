@@ -20,16 +20,16 @@ step()  { printf "\n\033[1m== %s ==\033[0m\n" "$1"; }
 
 step "Environment"
 
-if [[ -f venv/bin/activate ]]; then
-  # shellcheck disable=SC1091
-  source venv/bin/activate
-  ok "venv activated ($(python --version 2>&1))"
-elif [[ -f .venv/bin/activate ]]; then
+if [[ -f .venv/bin/activate ]]; then
   # shellcheck disable=SC1091
   source .venv/bin/activate
   ok ".venv activated ($(python --version 2>&1))"
+elif [[ -f venv/bin/activate ]]; then
+  # shellcheck disable=SC1091
+  source venv/bin/activate
+  ok "venv activated ($(python --version 2>&1))"
 else
-  fail "no venv/ or .venv/ found in $REPO_ROOT"
+  fail "no .venv/ or venv/ found in $REPO_ROOT"
 fi
 
 if command -v hermes >/dev/null 2>&1; then
@@ -117,12 +117,25 @@ else
   warn "tool discovery returned: $TOOL_COUNT"
 fi
 
+step "External Business Capability Guard"
+
+AI_CENTER_SMOKE="${AI_CENTER_SMOKE:-/Users/macbook/.ai-center/scripts/smoke_check.sh}"
+if [[ -x "$AI_CENTER_SMOKE" ]]; then
+  if "$AI_CENTER_SMOKE" >/tmp/ai_center_smoke.$$.json 2>&1; then
+    ok ".ai-center smoke_check.sh passed"
+  else
+    fail ".ai-center smoke_check.sh failed (see /tmp/ai_center_smoke.$$.json)"
+  fi
+else
+  warn ".ai-center smoke_check.sh not found/executable at $AI_CENTER_SMOKE"
+fi
+
 step "Summary"
 
 printf "\n  pass=%d  warn=%d  fail=%d\n\n" "$PASS" "$WARN" "$FAIL"
 
 # Cleanup
-rm -f /tmp/hermes_doctor.$$.log
+rm -f /tmp/hermes_doctor.$$.log /tmp/ai_center_smoke.$$.json
 
 if (( FAIL > 0 )); then
   exit 1
