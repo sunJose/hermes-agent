@@ -71,6 +71,11 @@ permissions_respond(id=..., decision="allow-once" | "deny")
 | 同 prompt 跑 3 个模型对比 | **Hermes**（多次 `hermes chat -m ...`） | 不该频繁切模型 |
 | 5 秒能查完的 grep | Claude Code | 走 MCP 反而绕 |
 
+### 3a. 让 HS 写长 memory 时
+- `--max-turns` **至少给 8**（compress + search + add 至少要 3-4 个 tool call，加上 ReAct 思考轮就接近上限）
+- prompt 里明确 **"只做一件事：直接 memory_add，不要 search/不要 compress"**——否则 HS 会反复 self-check 把 turn 烧光
+- 容量接近上限时 HS 会自己压缩旧 memory 腾空间，但**这步本身吃 turn**，要么先 `/memory` 看容量，要么单独一次 chat 让她先压缩
+
 ---
 
 ## 4. 踩坑提醒
