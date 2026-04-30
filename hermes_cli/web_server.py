@@ -4315,6 +4315,7 @@ async def serve_plugin_asset(plugin_name: str, file_path: str):
     Only serves files from the plugin's ``dashboard/`` subdirectory.
     Path traversal is blocked by checking ``resolve().is_relative_to()``.
     """
+    plugin_name = _validate_plugin_name(plugin_name)
     plugins = _get_dashboard_plugins()
     plugin = next((p for p in plugins if p["name"] == plugin_name), None)
     if not plugin:
