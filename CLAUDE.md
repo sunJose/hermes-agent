@@ -91,6 +91,14 @@ Keep the personal layer thin:
 6. **MCP bridge is live**: Boss's Claude Code session has `mcp__hermes__*`
    tools. When Boss asks "问 Hermes ..." or "让 Hermes 分析", route via `messages_send`
    or invoke `hermes chat -q "..." -Q --max-turns N` in Bash.
+   **Two hard guardrails** (full cheat sheet: `docs/claude-code-hermes-bridge.md`):
+   - `messages_send` 只是把字塞进会话，**不会让 Hermes 思考**。要 Hermes 真动脑必须
+     `Bash: hermes chat -q "..." -Q --max-turns N`。
+   - `events_wait` 默认 30 秒就空返回。human-in-the-loop 场景必须显式 `timeout_ms>=120000`，
+     否则会误判成"Boss 没回"继续往下跑。
+   **委派判断**：重复型 → `hermes cron`；事件型 → `hermes webhook`；长跑一次性 →
+   `hermes chat ... --max-turns N` + 完成后 `messages_send` 通知；5 秒能查完的事
+   Claude Code 自己干，别绕 MCP。
 7. **Skills migration from Helios:** when porting a Helios skill, target
    `skills/<name>/SKILL.md` + entry script. Adapt to
    [agentskills.io](https://agentskills.io) protocol.
