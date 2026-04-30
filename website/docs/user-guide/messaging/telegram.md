@@ -755,6 +755,78 @@ gateway:
 
 Use `/whoami` to see the active scope, your tier (admin / user / unrestricted), and which slash commands you can run.
 
+## Rendering: Tables and Link Previews
+
+Telegram's MarkdownV2 has no native table syntax — pipe tables render as backslash-escaped noise if passed through raw. Hermes normalizes markdown tables automatically:
+
+- **Small tables** are flattened into **row-group bullets** — each row becomes a readable bulleted list under the column headings. Good for 2–4 columns and short cells.
+- **Larger or wider tables** fall back to a **fenced code block** with aligned columns so nothing collapses. A one-line prompt hint is added so the agent knows to prefer prose follow-ups over more tables on Telegram.
+
+There's nothing to configure — the adapter picks the right fallback per message. If you want the legacy "always code-block" behavior, disable table normalization by setting `telegram.pretty_tables: false` in `config.yaml` (default: `true`).
+
+**Link previews.** Telegram auto-generates link previews for URLs in bot messages. If you'd rather suppress those (long `/tools` output, agent reply that mentions ten links, etc.):
+
+```yaml
+gateway:
+  platforms:
+    telegram:
+      extra:
+        disable_link_previews: true
+```
+
+When enabled, Hermes attaches Telegram's `LinkPreviewOptions(is_disabled=True)` to every outgoing message and falls back to the legacy `disable_web_page_preview` parameter on older `python-telegram-bot` versions.
+
+## Group Allowlisting
+
+Telegram groups and forum chats have two orthogonal gates you can configure:
+
+- **Sender user IDs** (`group_allow_from` / `TELEGRAM_GROUP_ALLOWED_USERS`) — sender-scoped allowlist that applies only to group/forum messages. Use this when you want specific users to be able to invoke the bot in groups without adding them to `TELEGRAM_ALLOWED_USERS` (which would also give them DM access).
+- **Chat IDs** (`group_allowed_chats` / `TELEGRAM_GROUP_ALLOWED_CHATS`) — chat-scoped allowlist. Any member of these groups/forums can interact with the bot. Useful for team/support bots where group membership itself is the access signal.
+
+```yaml
+gateway:
+  platforms:
+    telegram:
+      extra:
+        # Global access (DMs + groups). Users here can always invoke the bot.
+        allow_from:
+          - "123456789"
+        # Sender IDs allowed in groups/forums only. Does NOT grant DM access.
+        group_allow_from:
+          - "987654321"
+        # Entire groups/forums — any member is authorized.
+        group_allowed_chats:
+          - "-1001234567890"
+```
+
+Equivalent env vars:
+
+```bash
+TELEGRAM_ALLOWED_USERS="123456789"
+TELEGRAM_GROUP_ALLOWED_USERS="987654321"
+TELEGRAM_GROUP_ALLOWED_CHATS="-1001234567890"
+```
+
+Behavior:
+
+- `TELEGRAM_ALLOWED_USERS` covers all chat types (DMs, groups, forums).
+- `TELEGRAM_GROUP_ALLOWED_USERS` only authorizes the listed senders in groups/forums. They still can't DM the bot unless listed in `TELEGRAM_ALLOWED_USERS`.
+- A chat in `TELEGRAM_GROUP_ALLOWED_CHATS` authorizes every member of that chat, regardless of sender.
+- Use `*` in any of these to allow any sender/chat.
+- This layers on top of existing mention/pattern triggers and on top of `group_topics` + `ignored_threads`.
+
+### Migration from before PR #17686
+
+Prior to this split, `TELEGRAM_GROUP_ALLOWED_USERS` was the only knob and users put **chat IDs** in it. For backward compatibility, chat-ID-shaped values (starting with `-`) in `TELEGRAM_GROUP_ALLOWED_USERS` are still honored as chat IDs and a deprecation warning is logged once. Migration:
+
+```bash
+# Old (still works, but deprecated)
+TELEGRAM_GROUP_ALLOWED_USERS="-1001234567890"
+
+# New
+TELEGRAM_GROUP_ALLOWED_CHATS="-1001234567890"
+```
+
 ## Interactive Model Picker
 
 When you send `/model` with no arguments in a Telegram chat, Hermes shows an interactive inline keyboard for switching models:
