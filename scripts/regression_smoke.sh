@@ -117,6 +117,40 @@ else
   warn "tool discovery returned: $TOOL_COUNT"
 fi
 
+step "Runtime Import Chain"
+
+# Force the full gateway daemon import chain. This is what catches the
+# "cherry-picked fix references symbol from a feat we didn't pick" class of
+# regression — those break gateway.run import but leave hermes --version
+# / hermes doctor / mcp_serve unaffected. (See 2026-05-07 regression:
+# _BUILTIN_PLATFORM_VALUES + EphemeralReply missing → daemon respawn loop.)
+if python -c "
+import sys
+sys.path.insert(0, '$REPO_ROOT')
+from gateway.run import start_gateway  # noqa: F401
+from gateway.platforms.api_server import APIServerAdapter  # noqa: F401
+from gateway.platforms.base import BasePlatformAdapter  # noqa: F401
+" 2>/tmp/import_chain.$$.err; then
+  ok "gateway daemon import chain"
+else
+  fail "gateway daemon import chain ($(tail -1 /tmp/import_chain.$$.err 2>/dev/null))"
+fi
+
+# Real CLI exit path. Catches missing import sys / sys.exit-time NameError
+# class of regression that doesn't show up in --version / doctor.
+# Costs ~3-5s; uses --max-turns 1 with a trivial prompt.
+if hermes chat -q "ok" -Q --max-turns 1 >/tmp/chat_smoke.$$.log 2>&1; then
+  ok "hermes chat -q exit path clean"
+else
+  EXIT=$?
+  if grep -qE "NameError|ImportError|AttributeError" /tmp/chat_smoke.$$.log; then
+    fail "hermes chat -q raised $(grep -oE 'NameError|ImportError|AttributeError' /tmp/chat_smoke.$$.log | head -1) (see /tmp/chat_smoke.$$.log)"
+  else
+    warn "hermes chat -q exited $EXIT (likely network/credentials, not code)"
+  fi
+fi
+rm -f /tmp/import_chain.$$.err
+
 step "External Business Capability Guard"
 
 AI_CENTER_SMOKE="${AI_CENTER_SMOKE:-/Users/macbook/.ai-center/scripts/smoke_check.sh}"
@@ -135,7 +169,7 @@ step "Summary"
 printf "\n  pass=%d  warn=%d  fail=%d\n\n" "$PASS" "$WARN" "$FAIL"
 
 # Cleanup
-rm -f /tmp/hermes_doctor.$$.log /tmp/ai_center_smoke.$$.json
+rm -f /tmp/hermes_doctor.$$.log /tmp/ai_center_smoke.$$.json /tmp/chat_smoke.$$.log
 
 if (( FAIL > 0 )); then
   exit 1
