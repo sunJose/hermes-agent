@@ -1118,6 +1118,30 @@ def resolve_channel_skills(
     return None
 
 
+class EphemeralReply(str):
+    """Minimal compat shim for slash-command handlers that return ephemeral replies.
+
+    Backfilled locally in this fork because the upstream commit that
+    introduces full ephemeral-delete support (4caad285a, auto-delete
+    slash-command system notices after TTL) hasn't been cherry-picked.
+    Without this class, gateway/run.py fails to import. We keep the
+    str subclass + ttl_seconds attribute so isinstance() checks and
+    text concatenation work identically; TTL-based deletion silently
+    no-ops since adapters here don't implement _schedule_ephemeral_delete.
+    """
+
+    ttl_seconds: Optional[int]
+
+    def __new__(cls, text: str, ttl_seconds: Optional[int] = None):
+        instance = super().__new__(cls, text)
+        instance.ttl_seconds = ttl_seconds
+        return instance
+
+    @property
+    def text(self) -> str:
+        return str.__str__(self)
+
+
 class BasePlatformAdapter(ABC):
     """
     Base class for platform adapters.
