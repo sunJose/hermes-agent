@@ -181,6 +181,13 @@ class Platform(Enum):
 _BUILTIN_PLATFORM_VALUES = frozenset(m.value for m in Platform.__members__.values())
 
 
+# Set of built-in platform string values; referenced by gateway/run.py to
+# distinguish built-in platforms from plugin-registered ones. Backfilled
+# locally because upstream's introducing commit (868bc1c24, IRC interactive
+# setup) hasn't been cherry-picked into this fork.
+_BUILTIN_PLATFORM_VALUES = frozenset(m.value for m in Platform.__members__.values())
+
+
 @dataclass
 class HomeChannel:
     """
