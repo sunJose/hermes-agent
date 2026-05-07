@@ -83,11 +83,27 @@ Keep the personal layer thin:
 2. **Run smoke test before claiming "done"** for any non-trivial edit.
 3. **Don't auto-`hermes update`** — that pulls 682 commits silently.
 4. **Don't push to `origin/main`**. Push to `origin/boss/v0.11.0-personal`.
-5. **When asked "升级 Hermes" or "同步上游":**
-   - First run `scripts/upstream_digest.sh`
-   - Show Boss the digest
-   - Wait for Boss to point out which commits to absorb
-   - Cherry-pick one by one with smoke test between each
+5. **When asked "升级 Hermes" or "同步上游"** — full SOP:
+   - `git fetch upstream` first; **don't trust `scripts/upstream_digest.sh`** (it
+     uses tag baseline `v2026.4.23` which is way behind our actual base; use
+     `git log boss/v0.11.0-personal..upstream/main` for the real gap).
+   - Group commits by category (security / runtime hot path / Boss-relevant
+     provider/Telegram/MCP); ask Boss / HS for pick list.
+   - Cherry-pick in **independent worktree** (`git worktree add ../hermes-cherry-N`),
+     not in main checkout. Per-commit smoke between each.
+   - **After the batch is done, before merging to `boss/v0.11.0-personal`:**
+     - `PRE=$(git rev-parse boss/v0.11.0-personal)` → cherry-pick → 
+     - `scripts/cherry_dep_scan.sh $PRE..HEAD` — catches missing-symbol
+       regressions where a fix references a symbol introduced by a
+       feature commit we didn't pick (the 2026-05-07 `_BUILTIN_PLATFORM_VALUES` /
+       `EphemeralReply` class). Resolve every ✗ before continuing.
+     - `bash scripts/regression_smoke.sh` — must show **pass=12 / fail=0**
+       (the Runtime Import Chain step is what catches gateway daemon
+       breakage that bypasses `hermes --version` / `hermes doctor`).
+   - Only after both are green: ff-merge into `boss/v0.11.0-personal` →
+     push → ask Boss to `hermes gateway restart` (never auto).
+   - Update `~/.hermes/skills/personal/upgrade-history/SKILL.md` with the
+     new entry (event log lives there, not in MEMORY.md).
 6. **MCP bridge is live**: Boss's Claude Code session has `mcp__hermes__*`
    tools. When Boss asks "问 Hermes ..." or "让 Hermes 分析", route via `messages_send`
    or invoke `hermes chat -q "..." -Q --max-turns N` in Bash.
