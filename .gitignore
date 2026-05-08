@@ -71,7 +71,8 @@ result
 website/static/api/skills-index.json
 models-dev-upstream/
 
-# Crowbar/Lark run artifacts may contain authorized message metadata or content.
+# Run artifacts may contain authorized data or capture material.
 crowbar-runs/
+runs/
 *.pcap
 **/raw_capture/
