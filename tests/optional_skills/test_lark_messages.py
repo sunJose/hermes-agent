@@ -167,3 +167,24 @@ def test_empty_window_returns_empty_records(monkeypatch):
 
     assert payload["records"] == []
     assert payload["window"] == {"start_time": 100, "end_time": 100}
+
+
+def test_expired_token_401_is_reported_clearly(monkeypatch, tmp_path, capsys):
+    module = _load_module()
+    monkeypatch.setenv("LARK_TENANT_ACCESS_TOKEN", "expired-token-secret")
+    monkeypatch.setenv("LARK_CHAT_ID", "oc_targetchatsecret1234567890")
+
+    def fake_request(method, url, headers, body=None):
+        raise RuntimeError('HTTP 401 for https://open.larksuite.com/open-apis/im/v1/messages: {"msg":"token expired"}')
+
+    monkeypatch.setattr(module, "_json_request", fake_request)
+    out = tmp_path / "messages.json"
+    monkeypatch.setattr(sys, "argv", ["lark_messages.py", "--out", str(out)])
+
+    assert module.main() == 1
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "HTTP 401" in combined
+    assert "token expired" in combined
+    assert "expired-token-secret" not in combined
+    assert not out.exists()
