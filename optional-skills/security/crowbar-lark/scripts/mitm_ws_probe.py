@@ -10,40 +10,15 @@ Payload dumping is disabled by default. Enable only for small redacted samples:
 
 from __future__ import annotations
 
-import base64
-import json
-from datetime import datetime, timezone
 from pathlib import Path
+import sys
 
-from mitmproxy import ctx, websocket
+# scripts -> crowbar-lark -> security -> optional-skills
+_TOOLKIT = Path(__file__).resolve().parents[3] / "_toolkit"
+if str(_TOOLKIT) not in sys.path:
+    sys.path.insert(0, str(_TOOLKIT))
 
-
-class CrowbarWsProbe:
-    def load(self, loader):
-        loader.add_option("crowbar_out", str, "artifacts/ws_frames.jsonl", "Output JSONL path for WebSocket metadata.")
-        loader.add_option("crowbar_dump_payload", bool, False, "Include base64 payload samples. Keep false unless authorized.")
-        loader.add_option("crowbar_max_payload", int, 256, "Maximum payload bytes to include when dumping is enabled.")
-
-    def websocket_message(self, flow):
-        message: websocket.WebSocketMessage = flow.websocket.messages[-1]
-        payload = message.content or b""
-        record = {
-            "captured_at": datetime.now(timezone.utc).isoformat(),
-            "host": flow.request.pretty_host,
-            "path": flow.request.path,
-            "from_client": message.from_client,
-            "is_text": message.is_text,
-            "length": len(payload),
-            "first16_hex": payload[:16].hex(),
-        }
-        if ctx.options.crowbar_dump_payload:
-            sample = payload[: max(0, ctx.options.crowbar_max_payload)]
-            record["payload_sample_b64"] = base64.b64encode(sample).decode("ascii")
-
-        out = Path(ctx.options.crowbar_out)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with out.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+from ws_recorder import WSRecorder
 
 
-addons = [CrowbarWsProbe()]
+addons = [WSRecorder()]
