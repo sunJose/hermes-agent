@@ -88,13 +88,17 @@ class HomeChannel:
     platform: Platform
     chat_id: str
     name: str  # Human-readable name for display
+    thread_id: Optional[str] = None  # Optional topic/thread for platforms that support it
     
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "platform": self.platform.value,
             "chat_id": self.chat_id,
             "name": self.name,
         }
+        if self.thread_id:
+            result["thread_id"] = self.thread_id
+        return result
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "HomeChannel":
@@ -102,6 +106,7 @@ class HomeChannel:
             platform=Platform(data["platform"]),
             chat_id=str(data["chat_id"]),
             name=data.get("name", "Home"),
+            thread_id=str(data["thread_id"]) if data.get("thread_id") else None,
         )
 
 
