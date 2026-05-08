@@ -1,0 +1,4 @@
+interface:
+  display_name: "Crowbar Lark"
+  short_description: "Evidence-first Lark data extraction workflow"
+  default_prompt: "Use crowbar-lark to run an authorized Lark extraction PoC."
