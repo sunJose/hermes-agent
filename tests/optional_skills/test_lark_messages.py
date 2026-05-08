@@ -127,3 +127,26 @@ def test_api_error_message_is_clear(monkeypatch, tmp_path, capsys):
     assert "230002" in combined
     assert "Bot/User can NOT be out of the chat" in combined
     assert not out.exists()
+
+
+def test_stdout_stderr_do_not_leak_lark_app_secret(monkeypatch, tmp_path, capsys):
+    module = _load_module()
+    secret = "literal-lark-app-secret-value"
+    monkeypatch.setenv("LARK_APP_ID", "cli_test")
+    monkeypatch.setenv("LARK_APP_SECRET", secret)
+    monkeypatch.setenv("LARK_CHAT_ID", "oc_targetchatsecret1234567890")
+
+    def fake_request(method, url, headers, body=None):
+        if "tenant_access_token" in url:
+            return {"code": 0, "tenant_access_token": "tenant-token-secret"}
+        return _fake_success_response()
+
+    monkeypatch.setattr(module, "_json_request", fake_request)
+    out = tmp_path / "messages.json"
+    monkeypatch.setattr(sys, "argv", ["lark_messages.py", "--out", str(out)])
+
+    assert module.main() == 0
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert secret not in combined
+    assert out.exists()
