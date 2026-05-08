@@ -150,3 +150,20 @@ def test_stdout_stderr_do_not_leak_lark_app_secret(monkeypatch, tmp_path, capsys
     combined = captured.out + captured.err
     assert secret not in combined
     assert out.exists()
+
+
+def test_empty_window_returns_empty_records(monkeypatch):
+    module = _load_module()
+    monkeypatch.setenv("LARK_TENANT_ACCESS_TOKEN", "tenant-token-secret")
+
+    def fake_request(method, url, headers, body=None):
+        assert "start_time=100" in url
+        assert "end_time=100" in url
+        return {"code": 0, "data": {"items": [], "has_more": False}}
+
+    monkeypatch.setattr(module, "_json_request", fake_request)
+
+    payload = module.fetch_messages(_args(start_time=100, end_time=100))
+
+    assert payload["records"] == []
+    assert payload["window"] == {"start_time": 100, "end_time": 100}
