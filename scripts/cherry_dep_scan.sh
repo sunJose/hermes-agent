@@ -68,10 +68,44 @@ while IFS= read -r f; do
     continue
   fi
 
-  # Skip clearly non-importable files.
+  # Always-skip patterns (entry-point shims with no importable shape).
   case "$mod" in
-    setup|conftest|*-*) continue ;;
+    setup|conftest) continue ;;
   esac
+
+  # Hyphenated paths (e.g. optional-skills/_toolkit/foo.py → 'optional-skills...')
+  # can't go through importlib.import_module — invalid Python identifier.
+  # Promote the leaf package onto sys.path and import by its short name so
+  # relative imports inside __init__.py still work.
+  if [[ "$mod" == *-* ]]; then
+    if python -c "
+import importlib, importlib.util, os, sys
+sys.path.insert(0, '$REPO_ROOT')
+abs_f = os.path.join('$REPO_ROOT', '$f')
+parent = os.path.dirname(abs_f)
+if os.path.basename(abs_f) == '__init__.py':
+    # Import the package by its directory name with grandparent on path.
+    pkg_name = os.path.basename(parent)
+    grandparent = os.path.dirname(parent)
+    sys.path.insert(0, grandparent)
+    importlib.import_module(pkg_name)
+else:
+    # Module file inside a hyphenated path — load with parent on path so
+    # any sibling/relative imports resolve to the same package.
+    sys.path.insert(0, parent)
+    leaf = os.path.splitext(os.path.basename(abs_f))[0]
+    spec = importlib.util.spec_from_file_location(leaf, abs_f)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+" 2>/tmp/cherry_import_err.$$; then
+      PASSES=$((PASSES+1))
+    else
+      err=$(tail -1 /tmp/cherry_import_err.$$)
+      echo "  ✗ $f  →  $err"
+      ISSUES=$((ISSUES+1))
+    fi
+    continue
+  fi
 
   if python -c "import importlib, sys; sys.path.insert(0, '$REPO_ROOT'); importlib.import_module('$mod')" 2>/tmp/cherry_import_err.$$; then
     PASSES=$((PASSES+1))
