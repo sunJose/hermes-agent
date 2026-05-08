@@ -118,6 +118,10 @@ Move an extractor to `graduated/` only when it has:
 - `references/artifact-schema.md` - run directory and JSON evidence conventions.
 - `graduated/lark-openapi-messages.md` - validated official OpenAPI message metadata extractor path.
 
+## Dependencies
+
+- `_toolkit/ws_recorder` (>=0.1) - authorized WebSocket metadata recording; used by `scripts/mitm_ws_probe.py`.
+
 ## Scripts
 
 - `scripts/lark_messages.py` - fetch recent messages from the official Lark/Feishu OpenAPI using environment variables.
