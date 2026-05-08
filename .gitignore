@@ -73,3 +73,5 @@ models-dev-upstream/
 
 # Crowbar/Lark run artifacts may contain authorized message metadata or content.
 crowbar-runs/
+*.pcap
+**/raw_capture/
