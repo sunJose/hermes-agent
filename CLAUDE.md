@@ -92,7 +92,7 @@ Keep the personal layer thin:
    - Cherry-pick in **independent worktree** (`git worktree add ../hermes-cherry-N`),
      not in main checkout. Per-commit smoke between each.
    - **After the batch is done, before merging to `boss/v0.11.0-personal`:**
-     - `PRE=$(git rev-parse boss/v0.11.0-personal)` → cherry-pick → 
+     - `PRE=$(git rev-parse boss/v0.11.0-personal)` → cherry-pick →
      - `scripts/cherry_dep_scan.sh $PRE..HEAD` — catches missing-symbol
        regressions where a fix references a symbol introduced by a
        feature commit we didn't pick (the 2026-05-07 `_BUILTIN_PLATFORM_VALUES` /
