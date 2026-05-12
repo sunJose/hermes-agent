@@ -205,6 +205,14 @@ def _resolve_runtime_from_pool_entry(
     elif provider == "google-gemini-cli":
         api_mode = "chat_completions"
         base_url = base_url or "cloudcode-pa://google"
+    elif provider == "minimax-oauth":
+        # MiniMax OAuth tokens are valid only against the Anthropic Messages
+        # compatible endpoint. Do not honor stale model.api_mode values from a
+        # prior OpenAI-compatible provider, or the client will hit
+        # /chat/completions under /anthropic and receive a bare nginx 404.
+        api_mode = "anthropic_messages"
+        pconfig = PROVIDER_REGISTRY.get(provider)
+        base_url = base_url or (pconfig.inference_base_url if pconfig else "")
     elif provider == "anthropic":
         api_mode = "anthropic_messages"
         cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
@@ -1069,6 +1077,20 @@ def resolve_runtime_provider(
                 raise
             logger.info("Qwen OAuth credentials failed; "
                         "falling through to next provider.")
+
+    if provider == "minimax-oauth":
+        pconfig = PROVIDER_REGISTRY.get(provider)
+        if pconfig and pconfig.auth_type == "oauth_minimax":
+            from hermes_cli.auth import resolve_minimax_oauth_runtime_credentials
+            creds = resolve_minimax_oauth_runtime_credentials()
+            return {
+                "provider": provider,
+                "api_mode": "anthropic_messages",
+                "base_url": creds["base_url"],
+                "api_key": creds["api_key"],
+                "source": creds.get("source", "oauth"),
+                "requested_provider": requested_provider,
+            }
 
     if provider == "google-gemini-cli":
         try:

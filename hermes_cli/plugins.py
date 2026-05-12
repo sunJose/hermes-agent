@@ -37,6 +37,7 @@ import importlib
 import importlib.metadata
 import importlib.util
 import logging
+import os
 import sys
 import types
 from dataclasses import dataclass, field
@@ -46,6 +47,14 @@ from typing import Any, Callable, Dict, List, Optional, Set, Union
 from hermes_constants import get_hermes_home
 from utils import env_var_enabled
 from hermes_cli.config import cfg_get
+
+
+def get_bundled_plugins_dir() -> Path:
+    """Locate the bundled ``plugins/`` directory."""
+    env_override = os.getenv("HERMES_BUNDLED_PLUGINS")
+    if env_override:
+        return Path(env_override)
+    return Path(__file__).resolve().parent.parent / "plugins"
 
 try:
     import yaml

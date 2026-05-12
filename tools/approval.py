@@ -112,7 +112,7 @@ _COMMAND_TAIL = r'(?:\s*(?:&&|\|\||;).*)?$'
 #
 # Hardline only applies to environments that can actually damage the host
 # (local, ssh, container-host cron).  Containerized backends (docker,
-# singularity, modal, daytona) already bypass the dangerous-command layer
+# singularity, modal, daytona, vercel_sandbox) already bypass the dangerous-command layer
 # because nothing they do can touch the host, so we leave that behavior
 # alone.
 #
@@ -178,6 +178,40 @@ HARDLINE_PATTERNS_COMPILED = [
 ]
 
 
+# =========================================================================
+# Sudo stdin guard — block password guessing via "sudo -S"
+# =========================================================================
+# When SUDO_PASSWORD is not configured, any explicit "sudo -S" in the
+# command is the LLM piping a guessed password via stdin.  This is a
+# brute-force attack vector: the model iterates through candidate
+# passwords, inspects sudo's "Sorry, try again" output, and refines.
+# Treat this as an unconditional block — there is never a legitimate
+# reason for the agent to pipe passwords to sudo -S when no password
+# has been configured.
+_SUDO_STDIN_RE = re.compile(
+    r'(?:^|[;&|`\n]|&&|\|\||\$\()\s*sudo\s+-S\b',
+    re.IGNORECASE)
+
+
+def _check_sudo_stdin_guard(command: str) -> tuple:
+    """Detect ``sudo -S`` (stdin password) without configured SUDO_PASSWORD.
+
+    When SUDO_PASSWORD is set, ``_transform_sudo_command`` injects ``-S``
+    internally — that path is legitimate and handled elsewhere.  This guard
+    only fires when SUDO_PASSWORD is *not* set, meaning the LLM explicitly
+    wrote ``sudo -S`` to pipe a guessed password.
+
+    Returns:
+        (is_blocked: bool, description: str | None)
+    """
+    if "SUDO_PASSWORD" in os.environ:
+        return (False, None)
+    normalized = _normalize_command_for_detection(command).lower()
+    if _SUDO_STDIN_RE.search(normalized):
+        return (True, "sudo password guessing via stdin (sudo -S)")
+    return (False, None)
+
+
 def detect_hardline_command(command: str) -> tuple:
     """Check if a command matches the unconditional hardline blocklist.
 
@@ -203,6 +237,20 @@ def _hardline_block_result(description: str) -> dict:
             "approvals.mode=off, or cron approve mode. If you genuinely "
             "need to run it, run it yourself in a terminal outside the "
             "agent."
+        ),
+    }
+
+
+def _sudo_stdin_block_result(description: str) -> dict:
+    """Build the standard block result for sudo stdin guard."""
+    return {
+        "approved": False,
+        "message": (
+            f"BLOCKED: {description}. "
+            "Do not pipe passwords to 'sudo -S' — this is a brute-force "
+            "attack vector. Set SUDO_PASSWORD in your .env file if the "
+            "agent needs passwordless sudo, or run the sudo command "
+            "manually in your own terminal."
         ),
     }
 
@@ -277,6 +325,25 @@ DANGEROUS_PATTERNS = [
     # a script is first made executable then immediately run. The script
     # content may contain dangerous commands that individual patterns miss.
     (r'\bchmod\s+\+x\b.*[;&|]+\s*\./', "chmod +x followed by immediate execution"),
+    # Sudo with stdin / askpass / shell / list-privs flags. An LLM-driven
+    # agent has no TTY, so sudo invocations that succeed without human
+    # interaction are those reading the password from stdin (-S/--stdin)
+    # or via an askpass helper (-A/--askpass). The shell-launch (-s) and
+    # list-privileges (-a) flags are also gated since they are
+    # privilege-relevant invocations the agent can chain after acquiring
+    # the password (e.g. read SUDO_PASSWORD from .env -> sudo -S -s ->
+    # root shell). Plain `sudo cmd` (no flag) is TTY-bound and excluded.
+    # `_normalize_command_for_detection` lowercases input before pattern
+    # matching, so case variants of S/s and A/a collapse — both forms
+    # are gated below. Lazy `[^;|&\n]*?` allows flag arguments (e.g.
+    # `sudo -u root -S whoami`) without spanning command separators. See
+    # #17873 category 4.
+    (r'\bsudo\b[^;|&\n]*?\s+(?:-s\b|--stdin\b|-a\b|--askpass\b)',
+     "sudo with privilege flag (stdin/askpass/shell/list)"),
+    # Combined short-flag form: -nS, -ns, -sa, -las — sudo flags packed
+    # into a single -X token. Catches the same threat class.
+    (r'\bsudo\b[^;|&\n]*?\s+-[a-z]*[sa][a-z]*\b',
+     "sudo with combined-flag privilege escalation"),
 ]
 
 
@@ -782,7 +849,7 @@ def check_dangerous_command(command: str, env_type: str,
     Returns:
         {"approved": True/False, "message": str or None, ...}
     """
-    if env_type in ("docker", "singularity", "modal", "daytona"):
+    if env_type in ("docker", "singularity", "modal", "daytona", "vercel_sandbox"):
         return {"approved": True, "message": None}
 
     # Hardline floor: commands with no recovery path (rm -rf /, mkfs, dd
@@ -907,7 +974,7 @@ def check_all_command_guards(command: str, env_type: str,
     other was shown to the user.
     """
     # Skip containers for both checks
-    if env_type in ("docker", "singularity", "modal", "daytona"):
+    if env_type in ("docker", "singularity", "modal", "daytona", "vercel_sandbox"):
         return {"approved": True, "message": None}
 
     # Hardline floor: unconditional block for catastrophic commands
@@ -918,6 +985,17 @@ def check_all_command_guards(command: str, env_type: str,
     if is_hardline:
         logger.warning("Hardline block: %s (command: %s)", hardline_desc, command[:200])
         return _hardline_block_result(hardline_desc)
+
+    # == Sudo stdin guard ==
+    # Like the hardline floor above, this is unconditional: there is never a
+    # legitimate reason for the agent to pipe passwords to sudo -S when no
+    # SUDO_PASSWORD has been configured.  This must fire BEFORE the yolo
+    # check so even yolo/smart approval/mode=off cannot bypass it.
+    is_sudo_guess, sudo_guess_desc = _check_sudo_stdin_guard(command)
+    if is_sudo_guess:
+        logger.warning("Sudo stdin guard block: %s (command: %s)",
+                       sudo_guess_desc, command[:200])
+        return _sudo_stdin_block_result(sudo_guess_desc)
 
     # --yolo or approvals.mode=off: bypass all approval prompts.
     # Gateway /yolo is session-scoped; CLI --yolo remains process-scoped.

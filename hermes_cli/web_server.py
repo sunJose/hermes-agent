@@ -225,7 +225,7 @@ async def host_header_middleware(request: Request, call_next):
 async def auth_middleware(request: Request, call_next):
     """Require the session token on all /api/ routes except the public list."""
     path = request.url.path
-    if path.startswith("/api/") and path not in _PUBLIC_API_PATHS and not path.startswith("/api/plugins/"):
+    if path.startswith("/api/") and path not in _PUBLIC_API_PATHS:
         if not _has_valid_session_token(request):
             return JSONResponse(
                 status_code=401,
@@ -273,7 +273,9 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "stt.provider": {
         "type": "select",
         "description": "Speech-to-text provider",
-        "options": ["local", "openai", "mistral"],
+        # "mistral" temporarily removed — mistralai PyPI package quarantined
+        # (malicious 2.4.6 release on 2026-05-12). Restore once available.
+        "options": ["local", "openai"],
     },
     "display.skin": {
         "type": "select",
@@ -1443,7 +1445,9 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
     {
         "id": "minimax-oauth",
         "name": "MiniMax (OAuth)",
-        "flow": "pkce",
+        # MiniMax's operator UX is device-code-style (verification URI +
+        # user code, backend poll) with a PKCE extension for code binding.
+        "flow": "device_code",
         "cli_command": "hermes auth add minimax-oauth",
         "docs_url": "https://www.minimax.io",
         "status_fn": None,  # dispatched via auth.get_minimax_oauth_auth_status
@@ -1885,6 +1889,73 @@ async def _start_device_code_flow(provider_id: str) -> Dict[str, Any]:
             "poll_interval": int(s.get("interval") or 5),
         }
 
+    if provider_id == "minimax-oauth":
+        # MiniMax uses a device-code-style flow with a PKCE extension.
+        from hermes_cli.auth import (
+            _minimax_pkce_pair,
+            _minimax_request_user_code,
+            MINIMAX_OAUTH_CLIENT_ID,
+            MINIMAX_OAUTH_GLOBAL_BASE,
+        )
+        import httpx
+
+        verifier, challenge, state = _minimax_pkce_pair()
+        portal_base_url = (
+            os.getenv("MINIMAX_PORTAL_BASE_URL") or MINIMAX_OAUTH_GLOBAL_BASE
+        ).rstrip("/")
+
+        def _do_minimax_request():
+            with httpx.Client(
+                timeout=httpx.Timeout(15.0),
+                headers={"Accept": "application/json"},
+                follow_redirects=True,
+            ) as client:
+                return _minimax_request_user_code(
+                    client=client,
+                    portal_base_url=portal_base_url,
+                    client_id=MINIMAX_OAUTH_CLIENT_ID,
+                    code_challenge=challenge,
+                    state=state,
+                )
+
+        device_data = await asyncio.get_event_loop().run_in_executor(
+            None, _do_minimax_request
+        )
+        sid, sess = _new_oauth_session("minimax-oauth", "device_code")
+        interval_raw = device_data.get("interval")
+        sess["interval_ms"] = (
+            int(interval_raw) if interval_raw is not None else None
+        )
+        sess["user_code"] = str(device_data["user_code"])
+        sess["code_verifier"] = verifier
+        sess["state"] = state
+        sess["portal_base_url"] = portal_base_url
+        sess["client_id"] = MINIMAX_OAUTH_CLIENT_ID
+        sess["region"] = "global"
+        expired_in_raw = int(device_data["expired_in"])
+        sess["expired_in_raw"] = expired_in_raw
+        if expired_in_raw > 1_000_000_000_000:
+            expires_at_ts = expired_in_raw / 1000.0
+            expires_in_seconds = max(0, int(expires_at_ts - time.time()))
+        else:
+            expires_at_ts = time.time() + expired_in_raw
+            expires_in_seconds = expired_in_raw
+        sess["expires_at"] = expires_at_ts
+        threading.Thread(
+            target=_minimax_poller,
+            args=(sid,),
+            daemon=True,
+            name=f"oauth-poll-{sid[:6]}",
+        ).start()
+        return {
+            "session_id": sid,
+            "flow": "device_code",
+            "user_code": str(device_data["user_code"]),
+            "verification_url": str(device_data["verification_uri"]),
+            "expires_in": expires_in_seconds,
+            "poll_interval": max(2, (sess["interval_ms"] or 2000) // 1000),
+        }
+
     raise HTTPException(status_code=400, detail=f"Provider {provider_id} does not support device-code flow")
 
 
@@ -1941,6 +2012,88 @@ def _nous_poller(session_id: str) -> None:
         _log.info("oauth/device: nous login completed (session=%s)", session_id)
     except Exception as e:
         _log.warning("nous device-code poll failed (session=%s): %s", session_id, e)
+        with _oauth_sessions_lock:
+            sess["status"] = "error"
+            sess["error_message"] = str(e)
+
+def _minimax_poller(session_id: str) -> None:
+    """Background poller that drives a MiniMax OAuth flow to completion.
+
+    Mirrors `_nous_poller` but calls the MiniMax-specific token endpoint,
+    which uses a PKCE-style ``code_verifier`` + ``user_code`` rather than
+    the ``device_code`` field used by Nous. On success, builds the same
+    auth_state dict that ``_minimax_oauth_login`` (the CLI flow) builds
+    and persists via ``_minimax_save_auth_state`` — so the dashboard
+    path leaves the system in the same state as
+    ``hermes auth add minimax-oauth``.
+    """
+    from hermes_cli.auth import (
+        _minimax_poll_token,
+        _minimax_resolve_token_expiry_unix,
+        _minimax_save_auth_state,
+        MINIMAX_OAUTH_GLOBAL_INFERENCE,
+        MINIMAX_OAUTH_SCOPE,
+    )
+    from datetime import datetime, timezone
+    import httpx
+    with _oauth_sessions_lock:
+        sess = _oauth_sessions.get(session_id)
+    if not sess:
+        return
+    portal_base_url = sess["portal_base_url"]
+    client_id = sess["client_id"]
+    user_code = sess["user_code"]
+    code_verifier = sess["code_verifier"]
+    interval_ms = sess.get("interval_ms")
+    expired_in_raw = sess["expired_in_raw"]
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(15.0),
+            headers={"Accept": "application/json"},
+            follow_redirects=True,
+        ) as client:
+            token_data = _minimax_poll_token(
+                client=client,
+                portal_base_url=portal_base_url,
+                client_id=client_id,
+                user_code=user_code,
+                code_verifier=code_verifier,
+                expired_in=expired_in_raw,
+                interval_ms=interval_ms,
+            )
+        # Build the auth_state dict in the same shape as the CLI flow's
+        # `_minimax_oauth_login` so `_minimax_save_auth_state` writes
+        # the canonical record. Region is fixed to "global" for the
+        # dashboard path; cn-region operators can still use the CLI
+        # flow which supports `--region cn`.
+        now = datetime.now(timezone.utc)
+        expires_at_ts = _minimax_resolve_token_expiry_unix(
+            int(token_data["expired_in"]), now=now,
+        )
+        expires_in_s = max(0, int(expires_at_ts - now.timestamp()))
+        auth_state = {
+            "provider": "minimax-oauth",
+            "region": sess.get("region", "global"),
+            "portal_base_url": portal_base_url,
+            "inference_base_url": MINIMAX_OAUTH_GLOBAL_INFERENCE,
+            "client_id": client_id,
+            "scope": MINIMAX_OAUTH_SCOPE,
+            "token_type": token_data.get("token_type", "Bearer"),
+            "access_token": token_data["access_token"],
+            "refresh_token": token_data["refresh_token"],
+            "resource_url": token_data.get("resource_url"),
+            "obtained_at": now.isoformat(),
+            "expires_at": datetime.fromtimestamp(
+                expires_at_ts, tz=timezone.utc
+            ).isoformat(),
+            "expires_in": expires_in_s,
+        }
+        _minimax_save_auth_state(auth_state)
+        with _oauth_sessions_lock:
+            sess["status"] = "approved"
+        _log.info("oauth/device: minimax login completed (session=%s)", session_id)
+    except Exception as e:
+        _log.warning("minimax device-code poll failed (session=%s): %s", session_id, e)
         with _oauth_sessions_lock:
             sess["status"] = "error"
             sess["error_message"] = str(e)
@@ -2098,7 +2251,7 @@ async def start_oauth_login(provider_id: str, request: Request):
             detail=f"{provider_id} uses an external CLI; run `{catalog_entry['cli_command']}` manually",
         )
     try:
-        if catalog_entry["flow"] == "pkce":
+        if catalog_entry["flow"] == "pkce" and provider_id == "anthropic":
             return _start_anthropic_pkce()
         if catalog_entry["flow"] == "device_code":
             return await _start_device_code_flow(provider_id)
