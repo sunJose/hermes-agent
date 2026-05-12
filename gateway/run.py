@@ -5417,6 +5417,11 @@ class GatewayRunner:
                             if output:
                                 from agent.redact import redact_sensitive_text
                                 output = redact_sensitive_text(output)
+                                output = re.sub(
+                                    r"\bsk-[A-Za-z0-9_-]{10,}\b",
+                                    "[REDACTED]",
+                                    output,
+                                )
                             return output if output else "Command returned no output."
                         except asyncio.TimeoutError:
                             return "Quick command timed out (30s)."

@@ -1651,6 +1651,27 @@ def _reset_aux_unhealthy_cache() -> None:
     _aux_unhealthy_logged_at.clear()
 
 
+def _recoverable_pool_provider(resolved_provider: str, client: Any) -> Optional[str]:
+    """Infer which provider pool can recover the current auxiliary client."""
+    normalized = _normalize_aux_provider(resolved_provider)
+    if normalized not in {"", "auto", "custom"}:
+        return normalized
+    base = str(getattr(client, "base_url", "") or "")
+    if base_url_host_matches(base, "chatgpt.com"):
+        return "openai-codex"
+    if base_url_host_matches(base, "openrouter.ai"):
+        return "openrouter"
+    if base_url_host_matches(base, "inference-api.nousresearch.com"):
+        return "nous"
+    if base_url_host_matches(base, "api.anthropic.com"):
+        return "anthropic"
+    if base_url_host_matches(base, "api.githubcopilot.com"):
+        return "copilot"
+    if base_url_host_matches(base, "api.kimi.com"):
+        return "kimi-coding"
+    return None
+
+
 def _is_payment_error(exc: Exception) -> bool:
     """Detect payment/credit/quota exhaustion errors.
 

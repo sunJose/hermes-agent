@@ -1445,7 +1445,9 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
     {
         "id": "minimax-oauth",
         "name": "MiniMax (OAuth)",
-        "flow": "pkce",
+        # MiniMax's operator UX is device-code-style (verification URI +
+        # user code, backend poll) with a PKCE extension for code binding.
+        "flow": "device_code",
         "cli_command": "hermes auth add minimax-oauth",
         "docs_url": "https://www.minimax.io",
         "status_fn": None,  # dispatched via auth.get_minimax_oauth_auth_status
@@ -2249,7 +2251,7 @@ async def start_oauth_login(provider_id: str, request: Request):
             detail=f"{provider_id} uses an external CLI; run `{catalog_entry['cli_command']}` manually",
         )
     try:
-        if catalog_entry["flow"] == "pkce":
+        if catalog_entry["flow"] == "pkce" and provider_id == "anthropic":
             return _start_anthropic_pkce()
         if catalog_entry["flow"] == "device_code":
             return await _start_device_code_flow(provider_id)
