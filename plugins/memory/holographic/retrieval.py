@@ -106,6 +106,7 @@ class FactRetriever:
         # Sort by score descending, return top limit
         scored.sort(key=lambda x: x["score"], reverse=True)
         results = scored[:limit]
+        self._mark_retrieved(results)
         # Strip raw HRR bytes — callers expect JSON-serializable dicts
         for fact in results:
             fact.pop("hrr_vector", None)
@@ -187,7 +188,9 @@ class FactRetriever:
             scored.append(fact)
 
         scored.sort(key=lambda x: x["score"], reverse=True)
-        return scored[:limit]
+        results = scored[:limit]
+        self._mark_retrieved(results)
+        return results
 
     def related(
         self,
@@ -255,7 +258,9 @@ class FactRetriever:
             scored.append(fact)
 
         scored.sort(key=lambda x: x["score"], reverse=True)
-        return scored[:limit]
+        results = scored[:limit]
+        self._mark_retrieved(results)
+        return results
 
     def reason(
         self,
@@ -333,7 +338,9 @@ class FactRetriever:
             scored.append(fact)
 
         scored.sort(key=lambda x: x["score"], reverse=True)
-        return scored[:limit]
+        results = scored[:limit]
+        self._mark_retrieved(results)
+        return results
 
     def contradict(
         self,
@@ -476,7 +483,30 @@ class FactRetriever:
             scored.append(fact)
 
         scored.sort(key=lambda x: x["score"], reverse=True)
-        return scored[:limit]
+        results = scored[:limit]
+        self._mark_retrieved(results)
+        return results
+
+    def _mark_retrieved(self, facts: list[dict]) -> None:
+        """Increment retrieval_count for returned facts.
+
+        The public search/probe/related/reason paths previously returned facts
+        without updating this metric, making all facts look unused even when
+        prefetch or explicit fact_store queries had selected them.
+        """
+        ids = [int(f["fact_id"]) for f in facts if f.get("fact_id") is not None]
+        if not ids:
+            return
+        placeholders = ",".join("?" * len(ids))
+        try:
+            self.store._conn.execute(
+                f"UPDATE facts SET retrieval_count = retrieval_count + 1 WHERE fact_id IN ({placeholders})",
+                ids,
+            )
+            self.store._conn.commit()
+        except Exception:
+            # Retrieval metrics are best-effort; never fail recall because of accounting.
+            return
 
     def _fts_candidates(
         self,
