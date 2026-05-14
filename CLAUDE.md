@@ -17,18 +17,21 @@ This file only documents Boss-specific conventions that override or complement i
 ## Branch Topology (this fork)
 
 ```
-upstream/main          NousResearch/hermes-agent (read-only, 682+ ahead of v2026.4.23)
-origin/main            sunJose/hermes-agent — mirrors upstream/main, untouched
-origin/boss/v0.11.0-personal   ← THE working branch. All Boss work goes here.
+upstream/main                    NousResearch/hermes-agent (read-only)
+origin/main                      sunJose/hermes-agent — mirrors upstream/main, untouched
+origin/boss/v0.13.x-personal     ← THE working branch. All Boss work goes here.
+origin/boss/v0.11.0-personal     legacy, frozen — do not commit here anymore
 ```
 
-**Working branch is `boss/v0.11.0-personal`.** Never push to `main` of this fork
+**Working branch is `boss/v0.13.x-personal`.** Never push to `main` of this fork
 unless explicitly instructed — `main` is reserved for tracking upstream during sync.
+
+Current baseline: Hermes Agent **v0.13.0 (2026.5.7)**.
 
 ## Sync Strategy: Upstream Baseline + Thin Personal Layer
 
 This fork should stay close to `upstream/main`. Prefer periodically rebasing or
-rebuilding `boss/v0.11.0-personal` on top of `upstream/main`, then replaying only
+rebuilding `boss/v0.13.x-personal` on top of `upstream/main`, then replaying only
 the small personal layer required for Boss's runtime.
 
 **Never run** `git pull upstream main`, `git merge upstream/main`, or force-push
@@ -38,12 +41,12 @@ the working branch without Boss approval.
 
 ```bash
 git fetch upstream origin --prune
-backup="backup/boss-v0.11.0-before-upstream-$(date +%Y%m%d-%H%M%S)"
-git branch "$backup" boss/v0.11.0-personal
+backup="backup/boss-v0.13.x-before-upstream-$(date +%Y%m%d-%H%M%S)"
+git branch "$backup" boss/v0.13.x-personal
 git switch -c boss/rebase-test upstream/main
 # replay only Boss-specific commits/files, then smoke test
 bash scripts/regression_smoke.sh
-git push --force-with-lease origin boss/v0.11.0-personal
+git push --force-with-lease origin boss/v0.13.x-personal
 ```
 
 Categories worth absorbing from upstream:
@@ -73,34 +76,37 @@ Keep the personal layer thin:
 |---|---|
 | `docker/SOUL.md` | Boss's Hermes persona (zh-CN, Senior AI engineer + private secretary) |
 | `scripts/regression_smoke.sh` | 30-second smoke test — run after any cherry-pick or risky edit |
-| `scripts/upstream_digest.sh` | Summarize upstream commits since v0.11.0 by directory |
+| `scripts/upstream_digest.sh` | Summarize upstream commits by directory (baseline tag is stale — see SOP step 5) |
+| `scripts/cherry_dep_scan.sh` | Catches missing-symbol regressions after a cherry-pick batch |
 | external `~/.hermes/skills/business` + `.ai-center` | Boss's private business skills/data; keep outside this repo |
 | `CLAUDE.md` | This file — Boss-specific Claude Code config |
 
 ## How Claude Code Should Behave Here
 
-1. **Default to `boss/v0.11.0-personal`** when committing.
-2. **Run smoke test before claiming "done"** for any non-trivial edit.
-3. **Don't auto-`hermes update`** — that pulls 682 commits silently.
-4. **Don't push to `origin/main`**. Push to `origin/boss/v0.11.0-personal`.
+1. **Default to `boss/v0.13.x-personal`** when committing.
+2. **Run smoke test before claiming "done"** for any non-trivial edit. The
+   smoke script still warns when the branch isn't `v0.11.0-personal` — that
+   warning is expected; only `fail=0` matters.
+3. **Don't auto-`hermes update`** — that pulls upstream silently.
+4. **Don't push to `origin/main`**. Push to `origin/boss/v0.13.x-personal`.
 5. **When asked "升级 Hermes" or "同步上游"** — full SOP:
-   - `git fetch upstream` first; **don't trust `scripts/upstream_digest.sh`** (it
-     uses tag baseline `v2026.4.23` which is way behind our actual base; use
-     `git log boss/v0.11.0-personal..upstream/main` for the real gap).
+   - `git fetch upstream` first; **don't trust `scripts/upstream_digest.sh`** (its
+     tag baseline is stale; use `git log boss/v0.13.x-personal..upstream/main`
+     for the real gap).
    - Group commits by category (security / runtime hot path / Boss-relevant
      provider/Telegram/MCP); ask Boss / HS for pick list.
    - Cherry-pick in **independent worktree** (`git worktree add ../hermes-cherry-N`),
      not in main checkout. Per-commit smoke between each.
-   - **After the batch is done, before merging to `boss/v0.11.0-personal`:**
-     - `PRE=$(git rev-parse boss/v0.11.0-personal)` → cherry-pick →
+   - **After the batch is done, before merging to `boss/v0.13.x-personal`:**
+     - `PRE=$(git rev-parse boss/v0.13.x-personal)` → cherry-pick →
      - `scripts/cherry_dep_scan.sh $PRE..HEAD` — catches missing-symbol
        regressions where a fix references a symbol introduced by a
        feature commit we didn't pick (the 2026-05-07 `_BUILTIN_PLATFORM_VALUES` /
        `EphemeralReply` class). Resolve every ✗ before continuing.
-     - `bash scripts/regression_smoke.sh` — must show **pass=12 / fail=0**
+     - `bash scripts/regression_smoke.sh` — must show `fail=0`
        (the Runtime Import Chain step is what catches gateway daemon
        breakage that bypasses `hermes --version` / `hermes doctor`).
-   - Only after both are green: ff-merge into `boss/v0.11.0-personal` →
+   - Only after both are green: ff-merge into `boss/v0.13.x-personal` →
      push → ask Boss to `hermes gateway restart` (never auto).
    - Update `~/.hermes/skills/personal/upgrade-history/SKILL.md` with the
      new entry (event log lives there, not in MEMORY.md).
@@ -138,11 +144,14 @@ When asked to "let Hermes handle this", consider whether it should be:
   2026-04-29: `origin = sunJose/hermes-agent`, `upstream = NousResearch/hermes-agent`.
 - Local working tree had uncommitted `docker/SOUL.md` and `web/package-lock.json`
   for an unknown duration — committed to `boss/v0.11.0-personal` 2026-04-29.
+- Holographic memory's `FactRetriever.search/probe/related/reason/contradict`
+  never incremented `retrieval_count` — fixed 2026-05-14 (`c6cc289b6`). If you
+  see facts whose counter looks "frozen" before that commit, that's why.
 - `hermes mcp serve` is **not** the same as "talking to the Hermes agent" —
   it exposes Hermes's IM bridge to MCP clients. To actually converse with the
   agent, use `hermes chat -q ... -Q` or the gateway/api_server.
 
 ---
 
-*Last updated: 2026-04-29 by Claude Code, on Boss instruction. Keep this file
+*Last updated: 2026-05-14 by Claude Code, on Boss instruction. Keep this file
 under 200 lines — when it grows, prune or split.*
