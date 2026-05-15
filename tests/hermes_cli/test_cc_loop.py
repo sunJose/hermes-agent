@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from hermes_cli.cc_loop import load_packet_fields, run_review_gate
+from hermes_cli.cc_loop import _default_output_path, add_cc_loop_parser, load_packet_fields, run_review_gate
+from hermes_cli.review_gate import add_review_gate_parser
 
 
 POLICY = """
@@ -47,6 +48,43 @@ def test_load_packet_fields_requires_json_object(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="packet JSON must be an object"):
         load_packet_fields(packet)
+
+
+def test_default_output_path_uses_hermes_reviews_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("hermes_cli.cc_loop.Path.home", lambda: tmp_path)
+
+    output_path = _default_output_path("stage_review")
+
+    assert output_path.parent == tmp_path / ".hermes" / "reviews"
+    assert output_path.name.startswith("hermes-cc-loop-stage_review-")
+
+
+def test_review_gate_and_cc_loop_parsers_accept_high_risk_review() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command")
+    add_review_gate_parser(subparsers)
+    add_cc_loop_parser(subparsers)
+
+    review_args = parser.parse_args([
+        "review-gate",
+        "--stage",
+        "high_risk_review",
+        "--field",
+        "task_goal=x",
+        "--dry-run",
+    ])
+    cc_args = parser.parse_args([
+        "cc-loop",
+        "--stage",
+        "high_risk_review",
+        "--json",
+        "packet.json",
+    ])
+
+    assert review_args.stage == "high_risk_review"
+    assert cc_args.stage == "high_risk_review"
 
 
 def test_run_review_gate_saves_primary_review_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

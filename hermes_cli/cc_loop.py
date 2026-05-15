@@ -11,8 +11,9 @@ from typing import Any, Mapping
 from hermes_cli.review_gate import (
     DEFAULT_POLICY_PATH,
     ReviewTarget,
-    _primary_command,
+    REVIEW_GATE_STAGES,
     build_review_packet,
+    build_target_command,
     choose_review_target,
     load_review_policy,
 )
@@ -28,9 +29,7 @@ class CCLoopReviewResult:
 
 
 def _default_output_path(stage: str) -> Path:
-    output_dir = Path.home() / "Downloads"
-    if not output_dir.exists():
-        output_dir = Path("/tmp")
+    output_dir = Path.home() / ".hermes" / "reviews"
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return output_dir / f"hermes-cc-loop-{stage}-{stamp}.txt"
 
@@ -41,14 +40,6 @@ def load_packet_fields(path: str | Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"packet JSON must be an object: {packet_path}")
     return data
-
-
-def _target_command(target: ReviewTarget, packet: str) -> tuple[list[str], str | None]:
-    if target.kind == "profile":
-        return ["hermes", "--profile", target.name, "chat", "-q", packet], None
-    if target.name == "cc":
-        return _primary_command(target.name), packet
-    return _primary_command(target.name) + [packet], None
 
 
 def run_review_gate(
@@ -71,7 +62,7 @@ def run_review_gate(
     out_path = Path(output_path).expanduser() if output_path else _default_output_path(stage)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd, stdin = _target_command(target, packet)
+    cmd, stdin = build_target_command(target, packet)
     completed = subprocess.run(
         cmd,
         input=stdin,
@@ -130,9 +121,9 @@ def add_cc_loop_parser(subparsers: Any) -> None:
         description="MVP wrapper for CC闭环: send a structured packet to the configured review gate and save the review output.",
     )
     parser.add_argument("--policy", default=str(DEFAULT_POLICY_PATH), help="Path to agent-review-routing.yaml")
-    parser.add_argument("--stage", required=True, choices=["plan_review", "stage_review", "final_review"], help="Review gate stage")
+    parser.add_argument("--stage", required=True, choices=REVIEW_GATE_STAGES, help="Review gate stage")
     parser.add_argument("--json", required=True, help="JSON file containing packet fields")
-    parser.add_argument("--out", help="Where to save reviewer output; defaults to ~/Downloads")
+    parser.add_argument("--out", help="Where to save reviewer output; defaults to ~/.hermes/reviews")
     parser.add_argument("--now", help="Override local time for deterministic tests, ISO format")
     parser.add_argument("--timeout", type=int, default=600, help="Reviewer command timeout seconds")
     parser.set_defaults(func=cmd_cc_loop)

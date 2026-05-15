@@ -15,6 +15,7 @@ import yaml
 
 
 DEFAULT_POLICY_PATH = Path.home() / ".ai-center" / "config" / "agent-review-routing.yaml"
+REVIEW_GATE_STAGES = ("plan_review", "stage_review", "final_review", "high_risk_review")
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,19 @@ def is_local_time_between(now: datetime, window: str) -> bool:
 def _gate(policy: Mapping[str, Any], stage: str) -> Mapping[str, Any]:
     gates = policy.get("review_gates") or {}
     if stage not in gates:
+        if stage == "high_risk_review" and isinstance(policy.get("high_risk_policy"), Mapping):
+            return {
+                "trigger": "Before high-risk actions",
+                "primary": "cc",
+                "fallback": {"profile": _fallback_profile(policy, {}), "when": ["cc unavailable or no response"]},
+                "required_packet": [
+                    "operation",
+                    "affected_files_or_systems",
+                    "why_needed",
+                    "rollback_plan",
+                    "cc_decision_requested",
+                ],
+            }
         available = ", ".join(sorted(gates)) or "<none>"
         raise ValueError(f"unknown review gate stage: {stage}; available: {available}")
     gate = gates[stage]
@@ -101,6 +115,14 @@ def _primary_command(primary: str) -> list[str]:
             return ["claude-code", "-p"]
         raise RuntimeError("Claude reviewer command is unavailable for primary 'cc'")
     return [primary]
+
+
+def build_target_command(target: ReviewTarget, packet: str) -> tuple[list[str], str | None]:
+    if target.kind == "profile":
+        return ["hermes", "--profile", target.name, "chat", "-q", packet], None
+    if target.name == "cc":
+        return _primary_command(target.name), packet
+    return _primary_command(target.name) + [packet], None
 
 
 def choose_review_target(
@@ -174,15 +196,8 @@ def _parse_fields(values: list[str] | None) -> dict[str, str]:
 
 
 def _run_target(target: ReviewTarget, packet: str, timeout: int) -> int:
-    if target.kind == "profile":
-        cmd = ["hermes", "--profile", target.name, "chat", "-q", packet]
-        completed = subprocess.run(cmd, text=True, timeout=timeout, check=False)
-    elif target.name == "cc":
-        cmd = _primary_command(target.name)
-        completed = subprocess.run(cmd, input=packet, text=True, timeout=timeout, check=False)
-    else:
-        cmd = _primary_command(target.name) + [packet]
-        completed = subprocess.run(cmd, text=True, timeout=timeout, check=False)
+    cmd, stdin = build_target_command(target, packet)
+    completed = subprocess.run(cmd, input=stdin, text=True, timeout=timeout, check=False)
     return int(completed.returncode)
 
 
@@ -219,7 +234,7 @@ def add_review_gate_parser(subparsers: Any) -> None:
         description="Build a standard review packet from agent-review-routing.yaml and route it to cc or the reviewer profile.",
     )
     parser.add_argument("--policy", default=str(DEFAULT_POLICY_PATH), help="Path to agent-review-routing.yaml")
-    parser.add_argument("--stage", required=True, choices=["plan_review", "stage_review", "final_review"], help="Review gate stage")
+    parser.add_argument("--stage", required=True, choices=REVIEW_GATE_STAGES, help="Review gate stage")
     parser.add_argument("--field", action="append", help="Packet field as KEY=VALUE; repeatable")
     parser.add_argument("--json", help="JSON file containing packet fields")
     parser.add_argument("--text", help="Fallback text for context/risk fields")

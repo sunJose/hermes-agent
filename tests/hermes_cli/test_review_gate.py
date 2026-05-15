@@ -6,6 +6,9 @@ from pathlib import Path
 import pytest
 
 from hermes_cli.review_gate import (
+    REVIEW_GATE_STAGES,
+    ReviewTarget,
+    build_target_command,
     build_review_packet,
     choose_review_target,
     is_primary_available,
@@ -74,6 +77,53 @@ def test_primary_command_defaults_claude_to_print_mode(monkeypatch: pytest.Monke
     from hermes_cli.review_gate import _primary_command
 
     assert _primary_command("cc") == ["claude", "-p", "--tools", ""]
+
+
+def test_review_gate_stage_choices_include_high_risk_review() -> None:
+    assert REVIEW_GATE_STAGES == ("plan_review", "stage_review", "final_review", "high_risk_review")
+
+
+def test_build_target_command_is_shared_for_cc_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HERMES_CC_COMMAND", raising=False)
+    monkeypatch.setattr("hermes_cli.review_gate.shutil.which", lambda name: "/opt/homebrew/bin/claude" if name == "claude" else None)
+
+    cmd, stdin = build_target_command(ReviewTarget("command", "cc", "forced test"), "packet")
+
+    assert cmd == ["claude", "-p", "--tools", ""]
+    assert stdin == "packet"
+
+
+def test_build_target_command_uses_profile_chat_query() -> None:
+    cmd, stdin = build_target_command(ReviewTarget("profile", "reviewer", "forced test"), "packet")
+
+    assert cmd == ["hermes", "--profile", "reviewer", "chat", "-q", "packet"]
+    assert stdin is None
+
+
+def test_high_risk_review_can_use_policy_high_risk_section() -> None:
+    packet = build_review_packet(
+        {
+            "reviewer_profile": {"name": "reviewer"},
+            "review_gates": {},
+            "high_risk_policy": {"rule": "ask cc first"},
+        },
+        "high_risk_review",
+        {
+            "operation": "restart gateway",
+            "affected_files_or_systems": "gateway service",
+            "why_needed": "apply config",
+            "rollback_plan": "restart previous config",
+            "cc_decision_requested": "allow/deny/uncertain",
+        },
+    )
+
+    assert "审查阶段：high_risk_review" in packet
+    assert "operation：restart gateway" in packet
+
+
+def test_high_risk_review_requires_policy_high_risk_section_when_gate_is_absent() -> None:
+    with pytest.raises(ValueError, match="unknown review gate stage: high_risk_review"):
+        build_review_packet({"review_gates": {}}, "high_risk_review", {})
 
 
 def test_load_review_policy_rejects_non_mapping(tmp_path: Path) -> None:
