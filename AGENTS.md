@@ -13,6 +13,10 @@ source .venv/bin/activate   # or: source venv/bin/activate
 `$HOME/.hermes/hermes-agent/venv` (for worktrees that share a venv with the
 main checkout).
 
+## Review-Gated Development Flow
+
+For named multi-step flows such as “CC闭环”, follow `CLAUDE.md` → “CC闭环 Flow”: plan first, cc/Claude review before implementation, stage review after 3-5 completed slices, and cc decision for high-risk actions.
+
 ## Project Structure
 
 File counts shift constantly — don't treat the tree below as exhaustive.

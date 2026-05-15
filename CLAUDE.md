@@ -78,6 +78,7 @@ Keep the personal layer thin:
 | `scripts/regression_smoke.sh` | 30-second smoke test — run after any cherry-pick or risky edit |
 | `scripts/upstream_digest.sh` | Summarize upstream commits by directory (baseline tag is stale — see SOP step 5) |
 | `scripts/cherry_dep_scan.sh` | Catches missing-symbol regressions after a cherry-pick batch |
+| `docs/review-gates/review-packet-templates.md` | CC闭环 review packet templates; repo-safe docs only, while active routing policy lives outside the repo |
 | external `~/.hermes/skills/business` + `.ai-center` | Boss's private business skills/data; keep outside this repo |
 | `CLAUDE.md` | This file — Boss-specific Claude Code config |
 
@@ -132,6 +133,15 @@ Keep the personal layer thin:
 - **Hermes (runtime)**: Telegram/Discord gateway, cron jobs, long-running automations, cross-session memory.
 - **Claude Code (precision dev)**: Targeted features, debugging, code review, skill writing, this file.
 - **Codex Pro 20x (bulk dev)**: Large-scope refactors, exhaustive test generation, parallel investigation.
+
+### CC闭环 Flow
+
+When Boss says “批准 CC闭环” or approves a named multi-step development flow:
+1. Hermes drafts the plan and acceptance criteria first.
+2. Send the plan to cc/Claude for review before implementation.
+3. Implement in small slices; after 3-5 completed slices, send a stage review packet to cc. If cc is unavailable, use the reviewer profile only as fallback and mark `needs_cc_reaudit: true`.
+4. High-risk operations must be decided by cc/Claude first. If cc is uncertain, escalate to Boss. Even with cc approval, git push/force-push, production changes, mass deletion, business-repo commits, and secrets operations still require Boss's explicit approval.
+5. Run final verification and final review before reporting done. Do not auto-commit or push unless Boss explicitly approves.
 
 When asked to "let Hermes handle this", consider whether it should be:
 - A `hermes cron` schedule (recurring)

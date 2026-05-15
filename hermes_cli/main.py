@@ -9180,7 +9180,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "config", "cron", "curator", "dashboard", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
         "kanban", "login", "logout", "logs", "lsp", "mcp", "memory",
-        "model", "pairing", "plugins", "profile", "sessions", "setup",
+        "model", "pairing", "plugins", "profile", "review-gate", "cc-loop", "sessions", "setup",
         "skills", "slack", "status", "tools", "uninstall", "update",
         "version", "webhook", "whatsapp", "chat",
         # Help-ish invocations — plugin commands not being listed in
@@ -9374,6 +9374,20 @@ def main():
         help="Remove all fallback entries",
     )
     fallback_parser.set_defaults(func=cmd_fallback)
+
+    # =========================================================================
+    # review-gate command — build and route policy-based review packets
+    # =========================================================================
+    from hermes_cli.review_gate import add_review_gate_parser
+
+    add_review_gate_parser(subparsers)
+
+    # =========================================================================
+    # cc-loop command — minimal Hermes/Codex/Claude review wrapper
+    # =========================================================================
+    from hermes_cli.cc_loop import add_cc_loop_parser
+
+    add_cc_loop_parser(subparsers)
 
     # =========================================================================
     # gateway command
