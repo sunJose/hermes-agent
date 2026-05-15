@@ -16,6 +16,7 @@ from hermes_cli.review_gate import (
     is_local_time_between,
     load_review_policy,
     parse_review_output,
+    resolve_default_policy_path,
 )
 
 
@@ -40,6 +41,28 @@ reviewer_profile:
   name: reviewer
   can_substitute_cc_between: "20:00-04:00"
 """
+
+
+def test_load_review_policy_uses_ai_center_home_when_policy_path_omitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ai_center = tmp_path / "ai-center"
+    policy = ai_center / "config" / "agent-review-routing.yaml"
+    policy.parent.mkdir(parents=True)
+    policy.write_text(POLICY, encoding="utf-8")
+    monkeypatch.setenv("AI_CENTER_HOME", str(ai_center))
+    monkeypatch.delenv("HERMES_REVIEW_ROUTING_POLICY", raising=False)
+
+    assert resolve_default_policy_path() == policy
+    assert load_review_policy()["version"] == 1
+
+
+def test_load_review_policy_error_lists_attempted_default_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_CENTER_HOME", raising=False)
+    monkeypatch.delenv("HERMES_REVIEW_ROUTING_POLICY", raising=False)
+    monkeypatch.setattr("hermes_cli.review_gate.Path.home", lambda: tmp_path / "profile-home")
+    monkeypatch.setenv("USER", "definitely-missing-hermes-user")
+
+    with pytest.raises(FileNotFoundError, match="tried:"):
+        load_review_policy()
 
 
 def test_is_local_time_between_handles_midnight_wrap() -> None:
@@ -78,7 +101,25 @@ def test_primary_command_defaults_claude_to_print_mode(monkeypatch: pytest.Monke
     monkeypatch.setattr("hermes_cli.review_gate.shutil.which", lambda name: "/opt/homebrew/bin/claude" if name == "claude" else None)
     from hermes_cli.review_gate import _primary_command
 
-    assert _primary_command("cc") == ["claude", "-p", "--tools", ""]
+    assert _primary_command("cc") == [
+        "claude",
+        "-p",
+        "--allowedTools",
+        "Read,Grep,Glob,Bash(git diff:*),Bash(git status:*),Bash(git show:*),Bash(git log:*)",
+    ]
+
+
+def test_primary_command_applies_read_only_tools_to_claude_code_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HERMES_CC_COMMAND", raising=False)
+    monkeypatch.setattr("hermes_cli.review_gate.shutil.which", lambda name: "/opt/homebrew/bin/claude-code" if name == "claude-code" else None)
+    from hermes_cli.review_gate import _primary_command
+
+    assert _primary_command("cc") == [
+        "claude-code",
+        "-p",
+        "--allowedTools",
+        "Read,Grep,Glob,Bash(git diff:*),Bash(git status:*),Bash(git show:*),Bash(git log:*)",
+    ]
 
 
 def test_review_gate_stage_choices_include_high_risk_review() -> None:
@@ -91,7 +132,12 @@ def test_build_target_command_is_shared_for_cc_stdin(monkeypatch: pytest.MonkeyP
 
     cmd, stdin = build_target_command(ReviewTarget("command", "cc", "forced test"), "packet")
 
-    assert cmd == ["claude", "-p", "--tools", ""]
+    assert cmd == [
+        "claude",
+        "-p",
+        "--allowedTools",
+        "Read,Grep,Glob,Bash(git diff:*),Bash(git status:*),Bash(git show:*),Bash(git log:*)",
+    ]
     assert stdin == "packet"
 
 
@@ -249,6 +295,23 @@ def test_parse_review_output_handles_negative_reaudit_and_no_blocking_phrases() 
     assert parsed.decision == "allow"
     assert parsed.needs_followup is False
     assert parse_review_output("No blocking issues were found, but no explicit final decision.").decision == "uncertain"
+
+
+def test_parse_review_output_does_not_treat_non_blocking_prose_as_blocker() -> None:
+    parsed = parse_review_output("""
+    ## 【审查结果】✅ 通过
+    ### 小发现（非阻断）
+    1. claude-code fallback 建议补工具白名单，风险低。
+    非 allow 均阻断。fail-closed 确认无误。
+    verdict: can_continue
+    risk_level: low
+    decision: allow
+    needs_cc_reaudit: false
+    """)
+
+    assert parsed.decision == "allow"
+    assert parsed.blocking_items == []
+    assert parsed.needs_followup is False
 
 
 def test_evaluate_review_gate_result_blocks_high_risk_even_when_allowed() -> None:

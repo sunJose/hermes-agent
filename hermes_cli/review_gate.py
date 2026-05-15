@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pwd
 import re
 import shlex
 import shutil
@@ -17,6 +18,7 @@ import yaml
 
 DEFAULT_POLICY_PATH = Path.home() / ".ai-center" / "config" / "agent-review-routing.yaml"
 REVIEW_GATE_STAGES = ("plan_review", "stage_review", "final_review", "high_risk_review")
+CLAUDE_REVIEW_ALLOWED_TOOLS = "Read,Grep,Glob,Bash(git diff:*),Bash(git status:*),Bash(git show:*),Bash(git log:*)"
 
 
 @dataclass(frozen=True)
@@ -102,7 +104,7 @@ def _has_positive_followup_marker(text: str) -> bool:
 
 
 def _has_positive_deny_marker(text: str) -> bool:
-    without_negated = re.sub(r"无阻塞|无阻断|no\s+blocking(?:\s+issues)?|no\s+blockers", "", text, flags=re.I)
+    without_negated = re.sub(r"无阻塞|无阻断|非阻塞|非阻断|no\s+blocking(?:\s+issues)?|no\s+blockers", "", text, flags=re.I)
     deny_markers = ["需要修改", "rejected", "reject", "denied", "deny", "blocking", "阻塞", "不通过", "必须修复"]
     return any(marker in without_negated.lower() for marker in deny_markers)
 
@@ -146,7 +148,10 @@ def parse_review_output(text: str) -> ParsedReviewOutput:
         if risk_match:
             risk_level = risk_match.group(1).strip().lower()
         item = clean.lstrip("-•* ").strip()
-        if re.search(r"\b(blocking|blocker|must fix)\b|阻塞|阻断|必须修复|高风险", item, re.I) and not re.search(r"无阻塞|无阻断|no blocking|no blockers", item, re.I):
+        has_blocking_marker = re.search(r"\b(blocking|blocker|must fix)\b|阻塞|阻断|必须修复|高风险", item, re.I)
+        has_negated_blocking_marker = re.search(r"无阻塞|无阻断|非阻塞|非阻断|no blocking|no blockers", item, re.I)
+        has_explicit_blocking_label = re.match(r"^(?:blocking|blocker|must fix|阻塞|阻断|必须修复|高风险)\s*[:：]", item, re.I)
+        if has_blocking_marker and not has_negated_blocking_marker and has_explicit_blocking_label:
             blocking_items.append(item)
 
     has_followup_marker = _has_positive_followup_marker(trusted_text)
@@ -197,8 +202,46 @@ def evaluate_review_gate_result(
     return ReviewGateEvaluation(True, False, False, "review allowed continuation")
 
 
-def load_review_policy(path: str | Path = DEFAULT_POLICY_PATH) -> dict[str, Any]:
-    policy_path = Path(path).expanduser()
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    deduped: list[Path] = []
+    for path in paths:
+        key = str(path.expanduser())
+        if key not in seen:
+            seen.add(key)
+            deduped.append(path.expanduser())
+    return deduped
+
+
+def default_policy_path_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    explicit = os.getenv("HERMES_REVIEW_ROUTING_POLICY", "").strip()
+    if explicit:
+        candidates.append(Path(explicit))
+    ai_center_home = os.getenv("AI_CENTER_HOME", "").strip()
+    if ai_center_home:
+        candidates.append(Path(ai_center_home) / "config" / "agent-review-routing.yaml")
+    candidates.append(Path.home() / ".ai-center" / "config" / "agent-review-routing.yaml")
+    user = os.getenv("USER") or os.getenv("LOGNAME")
+    if user:
+        try:
+            candidates.append(Path(pwd.getpwnam(user).pw_dir) / ".ai-center" / "config" / "agent-review-routing.yaml")
+        except KeyError:
+            pass
+    return _dedupe_paths(candidates)
+
+
+def resolve_default_policy_path() -> Path:
+    candidates = default_policy_path_candidates()
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    tried = ", ".join(str(path) for path in candidates) or "<none>"
+    raise FileNotFoundError(f"review routing policy not found; tried: {tried}")
+
+
+def load_review_policy(path: str | Path | None = None) -> dict[str, Any]:
+    policy_path = Path(path).expanduser() if path else resolve_default_policy_path()
     if not policy_path.exists():
         raise FileNotFoundError(f"review routing policy not found: {policy_path}")
     with policy_path.open("r", encoding="utf-8") as f:
@@ -282,9 +325,9 @@ def _primary_command(primary: str) -> list[str]:
                 return command
             raise RuntimeError(f"Configured HERMES_CC_COMMAND is unavailable: {command[0]}")
         if shutil.which("claude"):
-            return ["claude", "-p", "--tools", ""]
+            return ["claude", "-p", "--allowedTools", CLAUDE_REVIEW_ALLOWED_TOOLS]
         if shutil.which("claude-code"):
-            return ["claude-code", "-p"]
+            return ["claude-code", "-p", "--allowedTools", CLAUDE_REVIEW_ALLOWED_TOOLS]
         raise RuntimeError("Claude reviewer command is unavailable for primary 'cc'")
     return [primary]
 
@@ -328,19 +371,27 @@ def choose_review_target(
     return ReviewTarget("profile", fallback_profile, f"{primary} unavailable or no response")
 
 
+def get_required_packet_fields(policy: Mapping[str, Any], stage: str) -> list[str]:
+    """Return required review packet field names for a gate stage."""
+    gate = _gate(policy, stage)
+    required = gate.get("required_packet") or []
+    return [str(name) for name in required]
+
+
 def build_review_packet(
     policy: Mapping[str, Any],
     stage: str,
     fields: Mapping[str, Any],
 ) -> str:
     gate = _gate(policy, stage)
-    required = gate.get("required_packet") or []
+    required = get_required_packet_fields(policy, stage)
     missing = [str(name) for name in required if not str(fields.get(str(name), "")).strip()]
     if missing:
         raise ValueError("missing required packet fields: " + ", ".join(missing))
 
     lines = [
         "请按 reviewer SOUL.md 的审查格式执行只读审查。",
+        "如果当前运行在 Claude Code/cc，请使用只读工具检查相关源码、测试和 git diff，不要只基于审查包文字下结论。",
         f"审查阶段：{stage}",
         f"触发条件：{gate.get('trigger', '')}",
         "",
@@ -405,7 +456,7 @@ def add_review_gate_parser(subparsers: Any) -> None:
         help="Run or dry-run the Hermes/cc/reviewer review gate policy",
         description="Build a standard review packet from agent-review-routing.yaml and route it to cc or the reviewer profile.",
     )
-    parser.add_argument("--policy", default=str(DEFAULT_POLICY_PATH), help="Path to agent-review-routing.yaml")
+    parser.add_argument("--policy", help="Path to agent-review-routing.yaml; defaults to HERMES_REVIEW_ROUTING_POLICY, AI_CENTER_HOME, or ~/.ai-center")
     parser.add_argument("--stage", required=True, choices=REVIEW_GATE_STAGES, help="Review gate stage")
     parser.add_argument("--field", action="append", help="Packet field as KEY=VALUE; repeatable")
     parser.add_argument("--json", help="JSON file containing packet fields")

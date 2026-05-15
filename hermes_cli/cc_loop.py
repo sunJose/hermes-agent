@@ -63,7 +63,7 @@ def run_review_gate(
     *,
     stage: str,
     fields: Mapping[str, Any],
-    policy_path: str | Path = DEFAULT_POLICY_PATH,
+    policy_path: str | Path | None = None,
     output_path: str | Path | None = None,
     manifest_path: str | Path | None = None,
     now: datetime | None = None,
@@ -188,7 +188,7 @@ def add_cc_loop_parser(subparsers: Any) -> None:
         help="Run a minimal Hermes/Codex/Claude review loop gate",
         description="MVP wrapper for CC闭环: send a structured packet to the configured review gate and save the review output.",
     )
-    parser.add_argument("--policy", default=str(DEFAULT_POLICY_PATH), help="Path to agent-review-routing.yaml")
+    parser.add_argument("--policy", help="Path to agent-review-routing.yaml; defaults to HERMES_REVIEW_ROUTING_POLICY, AI_CENTER_HOME, or ~/.ai-center")
     parser.add_argument("--stage", required=True, choices=REVIEW_GATE_STAGES, help="Review gate stage")
     parser.add_argument("--json", required=True, help="JSON file containing packet fields")
     parser.add_argument("--out", help="Where to save reviewer output; defaults to ~/.hermes/reviews")

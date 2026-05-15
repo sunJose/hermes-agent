@@ -265,7 +265,7 @@ def test_run_review_gate_saves_primary_review_output(tmp_path: Path, monkeypatch
 
     assert result.returncode == 0
     assert result.target.kind == "command"
-    assert calls[0][:4] == ["claude", "-p", "--tools", ""]
+    assert calls[0][:4] == ["claude", "-p", "--allowedTools", "Read,Grep,Glob,Bash(git diff:*),Bash(git status:*),Bash(git show:*),Bash(git log:*)"]
     saved = out.read_text(encoding="utf-8")
     assert "needs_cc_reaudit=false" in saved
     assert "【审查结果】✅ 通过" in saved

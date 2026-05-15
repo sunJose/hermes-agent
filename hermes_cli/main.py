@@ -9180,7 +9180,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "config", "cron", "curator", "dashboard", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
         "kanban", "login", "logout", "logs", "lsp", "mcp", "memory",
-        "model", "pairing", "plugins", "profile", "review-gate", "cc-loop", "sessions", "setup",
+        "model", "pairing", "plugins", "profile", "review-gate", "cc-loop", "rr", "sessions", "setup",
         "skills", "slack", "status", "tools", "uninstall", "update",
         "version", "webhook", "whatsapp", "chat",
         # Help-ish invocations — plugin commands not being listed in
@@ -9388,6 +9388,13 @@ def main():
     from hermes_cli.cc_loop import add_cc_loop_parser
 
     add_cc_loop_parser(subparsers)
+
+    # =========================================================================
+    # rr command — one-click review packet templates and strict cc-loop wrapper
+    # =========================================================================
+    from hermes_cli.rr import add_rr_parser
+
+    add_rr_parser(subparsers)
 
     # =========================================================================
     # gateway command
