@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -23,6 +24,177 @@ class ReviewTarget:
     kind: str
     name: str
     reason: str
+
+
+@dataclass(frozen=True)
+class ParsedReviewOutput:
+    decision: str
+    risk_level: str
+    blocking_items: list[str]
+    needs_followup: bool
+    needs_cc_reaudit: bool
+    summary: str
+
+
+@dataclass(frozen=True)
+class ReviewGateEvaluation:
+    can_continue: bool
+    must_fix: bool
+    needs_reaudit: bool
+    reason: str
+
+
+def _normalize_decision(value: str) -> str | None:
+    normalized = value.strip().lower()
+    if normalized in {"allow", "通过"}:
+        return "allow"
+    if normalized in {"deny", "需要修改", "阻塞", "不通过"}:
+        return "deny"
+    if normalized in {"uncertain", "unknown", "不确定", "需复审", "需要复审"}:
+        return "uncertain"
+    return None
+
+
+def _trusted_review_lines(text: str) -> list[str]:
+    """Return review lines that can carry the reviewer final verdict.
+
+    Reviewer output often includes markdown code fences or examples of the
+    expected schema. Those are untrusted because treating sample
+    ``decision: allow`` text as the actual verdict would fail open.
+    """
+    trusted: list[str] = []
+    in_code_fence = False
+    in_example_section = False
+    for line in text.splitlines():
+        stripped_line = line.strip()
+        if stripped_line.startswith(("```", "~~~")):
+            in_code_fence = not in_code_fence
+            continue
+        if in_code_fence:
+            continue
+
+        example_header = re.match(
+            r"^(?:example|examples|示例|格式示例|输出示例|requested format|期望格式)\s*[:：]?$",
+            stripped_line,
+            re.I,
+        )
+        if example_header:
+            in_example_section = True
+            continue
+        conclusion_header = re.match(
+            r"^(?:actual conclusion|final conclusion|conclusion|结论|最终结论|实际结论)\s*[:：]?$",
+            stripped_line,
+            re.I,
+        )
+        if conclusion_header:
+            in_example_section = False
+            continue
+        if in_example_section:
+            continue
+
+        trusted.append(line)
+    return trusted
+
+
+def _has_positive_followup_marker(text: str) -> bool:
+    without_negated = re.sub(r"不需要复审|无需复审|无须复审|no\s+reaudit\s+required|no\s+follow-?up\s+required", "", text, flags=re.I)
+    return re.search(r"需要复审|需复审|无法判断", without_negated, re.I) is not None
+
+
+def _has_positive_deny_marker(text: str) -> bool:
+    without_negated = re.sub(r"无阻塞|无阻断|no\s+blocking(?:\s+issues)?|no\s+blockers", "", text, flags=re.I)
+    deny_markers = ["需要修改", "rejected", "reject", "denied", "deny", "blocking", "阻塞", "不通过", "必须修复"]
+    return any(marker in without_negated.lower() for marker in deny_markers)
+
+
+def parse_review_output(text: str) -> ParsedReviewOutput:
+    raw = text or ""
+    stripped = raw.strip()
+    if not stripped:
+        return ParsedReviewOutput("uncertain", "unknown", [], True, False, "empty review output")
+
+    trusted_lines = _trusted_review_lines(stripped)
+    trusted_text = "\n".join(trusted_lines)
+    lowered = trusted_text.lower()
+    decision: str | None = None
+    decision_signals: list[str] = []
+    risk_level = "unknown"
+    needs_cc_reaudit = re.search(r"needs_cc_reaudit\s*[:=：]\s*true", lowered) is not None
+    blocking_items: list[str] = []
+
+    for line in trusted_lines:
+        clean = line.strip().strip("` *")
+        verdict_match = re.match(r"^(?:verdict|流程结论)\s*[:：]\s*(.+)$", clean, re.I)
+        if verdict_match:
+            verdict = verdict_match.group(1).strip().lower()
+            if verdict in {"can_continue", "continue"}:
+                decision_signals.append("allow")
+            elif verdict in {"must_fix", "blocked", "block"}:
+                decision_signals.append("deny")
+            elif verdict in {"needs_reaudit", "uncertain"}:
+                decision_signals.append("uncertain")
+        decision_match = re.match(r"^(?:decision|审查结论|审查结果)\s*[:：]\s*(.+)$", clean, re.I)
+        if decision_match:
+            normalized_decision = _normalize_decision(decision_match.group(1))
+            if normalized_decision:
+                decision_signals.append(normalized_decision)
+        if re.match(r"^【审查结果】\s*✅\s*通过\s*$", clean):
+            decision_signals.append("allow")
+        if re.match(r"^【审查结果】\s*(?:⚠️\s*)?需要修改\s*$", clean):
+            decision_signals.append("deny")
+        risk_match = re.match(r"^(?:risk_level|risk|风险等级)\s*[:：]\s*([a-zA-Z\u4e00-\u9fff_-]+)", clean, re.I)
+        if risk_match:
+            risk_level = risk_match.group(1).strip().lower()
+        item = clean.lstrip("-•* ").strip()
+        if re.search(r"\b(blocking|blocker|must fix)\b|阻塞|阻断|必须修复|高风险", item, re.I) and not re.search(r"无阻塞|无阻断|no blocking|no blockers", item, re.I):
+            blocking_items.append(item)
+
+    has_followup_marker = _has_positive_followup_marker(trusted_text)
+    if decision_signals:
+        if "deny" in decision_signals:
+            decision = "deny"
+        elif "uncertain" in decision_signals or needs_cc_reaudit or has_followup_marker:
+            decision = "uncertain"
+        elif all(signal == "allow" for signal in decision_signals):
+            decision = "allow"
+        else:
+            decision = "uncertain"
+
+    if decision is None:
+        uncertain_markers = ["uncertain", "不确定", "需复审", "需要复审", "无法判断"]
+        if _has_positive_deny_marker(trusted_text):
+            decision = "deny"
+        elif any(marker in lowered for marker in uncertain_markers) and has_followup_marker:
+            decision = "uncertain"
+        else:
+            decision = "uncertain"
+
+    if decision == "allow" and blocking_items:
+        decision = "deny"
+    needs_followup = decision != "allow" or bool(blocking_items) or needs_cc_reaudit
+    summary = next((line.strip() for line in trusted_lines if line.strip()), "")
+    return ParsedReviewOutput(decision, risk_level, blocking_items, needs_followup, needs_cc_reaudit, summary)
+
+
+def evaluate_review_gate_result(
+    stage: str,
+    parsed: ParsedReviewOutput,
+    *,
+    returncode: int,
+    needs_cc_reaudit: bool,
+) -> ReviewGateEvaluation:
+    if returncode != 0:
+        return ReviewGateEvaluation(False, True, False, f"review command failed: returncode={returncode}")
+    if parsed.decision == "deny":
+        return ReviewGateEvaluation(False, True, False, "review denied or found blocking issues")
+    if needs_cc_reaudit or parsed.needs_cc_reaudit:
+        return ReviewGateEvaluation(False, False, True, "fallback reviewer result requires cc reaudit")
+    risk = parsed.risk_level.strip().lower().replace("-", "_")
+    if risk in {"high", "high_risk", "critical", "高", "高风险"}:
+        return ReviewGateEvaluation(False, False, True, "high-risk review requires explicit follow-up approval")
+    if parsed.decision != "allow":
+        return ReviewGateEvaluation(False, False, True, "review decision is uncertain")
+    return ReviewGateEvaluation(True, False, False, "review allowed continuation")
 
 
 def load_review_policy(path: str | Path = DEFAULT_POLICY_PATH) -> dict[str, Any]:

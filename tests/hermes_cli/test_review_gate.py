@@ -11,9 +11,11 @@ from hermes_cli.review_gate import (
     build_target_command,
     build_review_packet,
     choose_review_target,
+    evaluate_review_gate_result,
     is_primary_available,
     is_local_time_between,
     load_review_policy,
+    parse_review_output,
 )
 
 
@@ -124,6 +126,158 @@ def test_high_risk_review_can_use_policy_high_risk_section() -> None:
 def test_high_risk_review_requires_policy_high_risk_section_when_gate_is_absent() -> None:
     with pytest.raises(ValueError, match="unknown review gate stage: high_risk_review"):
         build_review_packet({"review_gates": {}}, "high_risk_review", {})
+
+
+def test_parse_review_output_reads_explicit_decision_header() -> None:
+    parsed = parse_review_output("""
+    Some prose
+    decision: allow
+    risk_level: low
+    【问题列表】
+    - 无阻塞问题
+    """)
+
+    assert parsed.decision == "allow"
+    assert parsed.risk_level == "low"
+    assert parsed.needs_followup is False
+
+
+def test_parse_review_output_maps_blocking_text_to_deny() -> None:
+    parsed = parse_review_output("""
+    【审查结果】⚠️ 需要修改
+    risk_level: high
+    【问题列表】
+    - 阻塞：manifest 会写入真实 home，必须修复
+    - blocking: CLI output removed existing fields
+    """)
+
+    assert parsed.decision == "deny"
+    assert parsed.risk_level == "high"
+    assert parsed.needs_followup is True
+    assert parsed.blocking_items == [
+        "阻塞：manifest 会写入真实 home，必须修复",
+        "blocking: CLI output removed existing fields",
+    ]
+
+
+def test_parse_review_output_blocks_verdict_allow_when_reaudit_is_required() -> None:
+    parsed = parse_review_output("""
+    确认如果审查文本中同时出现 approve 和 deny 关键词，优先级逻辑是什么
+    当前无阻断问题。
+    **`verdict: can_continue`**
+    **`needs_cc_reaudit: true`**
+    """)
+
+    assert parsed.decision == "uncertain"
+    assert parsed.blocking_items == []
+    assert parsed.needs_cc_reaudit is True
+
+
+def test_parse_review_output_does_not_allow_ambiguous_mentions_of_pass() -> None:
+    ambiguous_texts = [
+        "未达到通过标准，建议补充测试",
+        "Expected output: decision: allow",
+        "Example: verdict: can_continue",
+        "请使用 decision: allow 表示通过，但本文未给出结论",
+        "这不是结论：✅ 通过 是示例",
+        "This mentions approved as an example only, no conclusion.",
+    ]
+
+    for text in ambiguous_texts:
+        parsed = parse_review_output(text)
+        assert parsed.decision == "uncertain", text
+        assert parsed.needs_followup is True
+
+
+def test_parse_review_output_accepts_only_explicit_line_level_allow_signals() -> None:
+    assert parse_review_output("decision: allow").decision == "allow"
+    assert parse_review_output("**`verdict: can_continue`**").decision == "allow"
+    assert parse_review_output("【审查结果】✅ 通过").decision == "allow"
+
+
+def test_parse_review_output_keeps_decision_protocol_strict() -> None:
+    assert parse_review_output("decision: approved").decision == "uncertain"
+    assert parse_review_output("decision: pass").decision == "uncertain"
+    assert parse_review_output("decision: 可以").decision == "uncertain"
+
+
+def test_parse_review_output_fails_closed_on_conflicting_structured_signals() -> None:
+    assert parse_review_output("verdict: can_continue\ndecision: deny\nrisk_level: low\n").decision == "deny"
+    assert parse_review_output("decision: allow\ndecision: deny\n").decision == "deny"
+    assert parse_review_output("decision: allow\n【审查结果】需要修改\n").decision == "deny"
+    assert parse_review_output("decision: allow\n后文说明：无法判断，需要复审\n").decision == "uncertain"
+
+
+def test_parse_review_output_ignores_allow_examples_in_code_blocks_and_example_sections() -> None:
+    assert parse_review_output("""
+    Reviewer says requested format is:
+    ```text
+    decision: allow
+    risk_level: low
+    ```
+    No final verdict provided.
+    """).decision == "uncertain"
+    assert parse_review_output("""
+    ~~~text
+    decision: allow
+    risk_level: low
+    ~~~
+    No final verdict provided.
+    """).decision == "uncertain"
+    assert parse_review_output("""
+    Example:
+    verdict: can_continue
+    No final verdict provided.
+    """).decision == "uncertain"
+    assert parse_review_output("""
+    Example:
+    - blocking: sample only
+    Actual conclusion:
+    decision: allow
+    risk_level: low
+    """).decision == "allow"
+    assert parse_review_output("""
+    Example:
+    decision: allow
+    Actual conclusion:
+    decision: deny
+    """).decision == "deny"
+
+
+def test_parse_review_output_handles_negative_reaudit_and_no_blocking_phrases() -> None:
+    parsed = parse_review_output("decision: allow\nrisk_level: low\n不需要复审\n")
+    assert parsed.decision == "allow"
+    assert parsed.needs_followup is False
+    assert parse_review_output("No blocking issues were found, but no explicit final decision.").decision == "uncertain"
+
+
+def test_evaluate_review_gate_result_blocks_high_risk_even_when_allowed() -> None:
+    parsed = parse_review_output("decision: allow\nrisk_level: high\n")
+    evaluation = evaluate_review_gate_result("final_review", parsed, returncode=0, needs_cc_reaudit=False)
+
+    assert evaluation.can_continue is False
+    assert evaluation.needs_reaudit is True
+
+
+def test_parse_review_output_fails_safe_to_uncertain_for_empty_or_ambiguous_text() -> None:
+    parsed = parse_review_output("")
+
+    assert parsed.decision == "uncertain"
+    assert parsed.risk_level == "unknown"
+    assert parsed.needs_followup is True
+    assert parsed.summary == "empty review output"
+
+
+def test_evaluate_review_gate_result_blocks_deny_uncertain_reaudit_and_high_risk() -> None:
+    allow = parse_review_output("decision: allow\nrisk_level: low\n")
+    deny = parse_review_output("decision: deny\nrisk_level: high\n- blocking: unsafe\n")
+    uncertain = parse_review_output("decision: uncertain\nrisk_level: medium\n")
+
+    assert evaluate_review_gate_result("final_review", allow, returncode=0, needs_cc_reaudit=False).can_continue
+    assert evaluate_review_gate_result("final_review", deny, returncode=0, needs_cc_reaudit=False).must_fix
+    assert evaluate_review_gate_result("stage_review", uncertain, returncode=0, needs_cc_reaudit=False).needs_reaudit
+    assert evaluate_review_gate_result("final_review", allow, returncode=0, needs_cc_reaudit=True).needs_reaudit
+    assert not evaluate_review_gate_result("high_risk_review", uncertain, returncode=0, needs_cc_reaudit=False).can_continue
 
 
 def test_load_review_policy_rejects_non_mapping(tmp_path: Path) -> None:
