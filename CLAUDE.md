@@ -122,17 +122,27 @@ Keep the personal layer thin:
    **委派判断**：重复型 → `hermes cron`；事件型 → `hermes webhook`；长跑一次性 →
    `hermes chat ... --max-turns N` + 完成后 `messages_send` 通知；5 秒能查完的事
    Claude Code 自己干，别绕 MCP。
-7. **Skills migration from Helios:** when porting a Helios skill, target
-   `skills/<name>/SKILL.md` + entry script. Adapt to
+7. **Skills migration from Helios:** when porting **from Helios specifically**,
+   target `skills/<name>/SKILL.md` + entry script and adapt to the
    [agentskills.io](https://agentskills.io) protocol.
+   **Project-internal advisor modules (e.g. `a-share-assistant/advisor/`) are
+   not Hermes skills** — they follow their owning project's conventions.
+   Only create a Hermes skill when the capability is meant to be reusable
+   across projects/sessions.
 8. **Never** modify `~/.hermes/config.yaml` or `~/.hermes/.env` directly via
    edit tools — those are Boss's runtime config, treat as read-only.
 
-## Three-Way Workflow (Hermes + Claude Code + Codex)
+## Working Layers
 
 - **Hermes (runtime)**: Telegram/Discord gateway, cron jobs, long-running automations, cross-session memory.
 - **Claude Code (precision dev)**: Targeted features, debugging, code review, skill writing, this file.
 - **Codex Pro 20x (bulk dev)**: Large-scope refactors, exhaustive test generation, parallel investigation.
+- **Passive consumers (advisor + cron briefs)**: Read-only daily/weekly briefs
+  via Hermes cron — `daily-audit`, `daily-commit`, `upstream-weekly`,
+  `holographic-coldscan`, `rule-promotion-review`, `rule-action-brief`. They
+  produce reports under `~/.ai-center/reports/` and **must not write back** to
+  source repos, rules, skills, or project state unless a separate
+  human-approved workflow explicitly says so.
 
 ### CC闭环 Flow
 
@@ -143,6 +153,16 @@ When Boss says “批准 CC闭环” or approves a named multi-step development 
 4. High-risk operations must be decided by cc/Claude first. If cc is uncertain, escalate to Boss. Even with cc approval, git push/force-push, production changes, mass deletion, business-repo commits, and secrets operations still require Boss's explicit approval.
 5. Run final verification and final review before reporting done. Do not auto-commit or push unless Boss explicitly approves.
 
+**Operational thresholds:**
+- `cc unavailable` = a `hermes chat` call to the cc reviewer times out
+  >8 minutes **or** ≥2 consecutive failures.
+- `needs_cc_reaudit: true` lives in the review packet's metadata; the next
+  CC闭环 tick reads it and bumps that packet to the front of the queue.
+- Each stage review packet **≤ 8000 tokens** (target 4000-6000). Over → split.
+  Include only: goals/context, completed slices, key diff summary, risks,
+  test results, reviewer questions. No full large files, no unrelated logs;
+  large diffs reference paths + summaries.
+
 When asked to "let Hermes handle this", consider whether it should be:
 - A `hermes cron` schedule (recurring)
 - A `hermes webhook` subscription (event-driven)
@@ -150,10 +170,9 @@ When asked to "let Hermes handle this", consider whether it should be:
 
 ## Pitfalls Already Hit
 
-- Default git remote `origin` originally pointed at upstream NousResearch — fixed
-  2026-04-29: `origin = sunJose/hermes-agent`, `upstream = NousResearch/hermes-agent`.
-- Local working tree had uncommitted `docker/SOUL.md` and `web/package-lock.json`
-  for an unknown duration — committed to `boss/v0.11.0-personal` 2026-04-29.
+> Historical 2026-04 pitfalls (origin remote misdirection, uncommitted
+> SOUL.md/lockfile) are archived in `~/.hermes/skills/personal/upgrade-history/SKILL.md`.
+
 - Holographic memory's `FactRetriever.search/probe/related/reason/contradict`
   never incremented `retrieval_count` — fixed 2026-05-14 (`c6cc289b6`). If you
   see facts whose counter looks "frozen" before that commit, that's why.
@@ -163,5 +182,5 @@ When asked to "let Hermes handle this", consider whether it should be:
 
 ---
 
-*Last updated: 2026-05-14 by Claude Code, on Boss instruction. Keep this file
-under 200 lines — when it grows, prune or split.*
+*Last updated: 2026-05-15 by Claude Code + Hermes Agent, on Boss instruction.
+Keep this file under 200 lines — when it grows, prune or split.*
