@@ -46,10 +46,10 @@ fi
 step "Branch / Identity"
 
 BR=$(git rev-parse --abbrev-ref HEAD)
-if [[ "$BR" == "boss/v0.11.0-personal" ]]; then
+if [[ "$BR" == "boss/v0.14.x-personal" ]]; then
   ok "on working branch ($BR)"
 elif [[ "$BR" == "main" ]]; then
-  warn "on main — Boss work should land on boss/v0.11.0-personal"
+  warn "on main — Boss work should land on boss/v0.14.x-personal"
 else
   warn "on non-default branch: $BR"
 fi

@@ -32,13 +32,17 @@ This file only documents Boss-specific conventions that override or complement i
 upstream/main                    NousResearch/hermes-agent (read-only)
 origin/main                      sunJose/hermes-agent — mirrors upstream/main, untouched
 origin/boss/v0.14.x-personal     ← THE working branch. All Boss work goes here.
-origin/boss/v0.14.x-personal     legacy, frozen — previous baseline before v0.14 rebuild
+origin/boss/v0.13.x-personal     legacy, frozen — previous baseline before v0.14 rebuild
 ```
 
 **Working branch is `boss/v0.14.x-personal`.** Never push to `main` of this fork
 unless explicitly instructed — `main` is reserved for tracking upstream during sync.
 
-Current baseline: Hermes Agent **v0.16.0 (2026.6.5)**.
+Current baseline: Hermes Agent **v0.19.0 (2026.7.20)**, rebased onto the
+official `v2026.7.20` tag at peeled commit `3ef6bbd2012` (2026-07-20).
+This is an explicitly approved stable-tag exception: on 2026-07-23,
+`upstream/main` was already 625 unreleased commits past the tag and included
+a distribution/packaging transition that was not needed for this fork.
 
 ## Sync Strategy: Upstream Baseline + Thin Personal Layer
 
