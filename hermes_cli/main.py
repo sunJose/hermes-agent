@@ -14061,7 +14061,7 @@ def main():
     # =========================================================================
     sessions_parser = subparsers.add_parser(
         "sessions",
-        help="Manage session history (list, rename, export, prune, delete)",
+        help="Manage session history (list, rename, archive, export, prune, delete)",
         description="View and manage the SQLite session store",
     )
     sessions_subparsers = sessions_parser.add_subparsers(dest="sessions_action")
@@ -14078,6 +14078,17 @@ def main():
         metavar="NEEDLE",
         help="Only sessions in one workspace: a git repo root or project dir "
         "(matched by path substring or basename).",
+    )
+    sessions_list_filter = sessions_list.add_mutually_exclusive_group()
+    sessions_list_filter.add_argument(
+        "--include-archived",
+        action="store_true",
+        help="Include archived sessions in the list",
+    )
+    sessions_list_filter.add_argument(
+        "--archived-only",
+        action="store_true",
+        help="Show only archived sessions",
     )
 
     def _add_session_filter_args(p, default_older_help):
@@ -14290,6 +14301,16 @@ def main():
         "bare number of days, or ISO timestamp)",
     )
 
+    sessions_unarchive = sessions_subparsers.add_parser(
+        "unarchive", help="Restore one or more archived sessions by ID"
+    )
+    sessions_unarchive.add_argument(
+        "session_ids", nargs="+", help="Session ID(s) to unarchive"
+    )
+    sessions_unarchive.add_argument(
+        "--yes", "-y", action="store_true", help="Skip confirmation"
+    )
+
     sessions_subparsers.add_parser(
         "optimize",
         help="Reclaim disk space: merge FTS5 segments + VACUUM (no data change)",
@@ -14408,7 +14429,11 @@ def main():
             from hermes_state import workspace_key as _ws_key
 
             sessions = db.list_sessions_rich(
-                source=args.source, exclude_sources=_exclude, limit=args.limit
+                source=args.source,
+                exclude_sources=_exclude,
+                limit=args.limit,
+                include_archived=args.include_archived,
+                archived_only=args.archived_only,
             )
 
             # Workspace filter: match a session by its workspace key (git repo
@@ -14901,6 +14926,30 @@ def main():
                 print(f"Deleted session '{resolved_session_id}'.")
             else:
                 print(f"Session '{args.session_id}' not found.")
+
+        elif action == "unarchive":
+            resolved_session_ids = []
+            missing = []
+            for session_id in args.session_ids:
+                resolved_session_id = db.resolve_session_id(session_id)
+                if resolved_session_id:
+                    resolved_session_ids.append(resolved_session_id)
+                else:
+                    missing.append(session_id)
+            if missing:
+                print(f"Session(s) not found or ambiguous: {', '.join(missing)}")
+                return
+            if not args.yes:
+                if not _confirm_prompt(
+                    f"Unarchive {len(resolved_session_ids)} session(s)? [y/N] "
+                ):
+                    print("Cancelled.")
+                    return
+            changed = 0
+            for session_id in resolved_session_ids:
+                if db.set_session_archived(session_id, False):
+                    changed += 1
+            print(f"Unarchived {changed} session(s).")
 
         elif action in ("prune", "archive"):
             from hermes_cli.session_filters import (
