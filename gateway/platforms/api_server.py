@@ -126,6 +126,20 @@ CHAT_COMPLETIONS_SSE_KEEPALIVE_SECONDS = 30.0
 MAX_NORMALIZED_TEXT_LENGTH = 65_536  # 64 KB cap for normalized content parts
 MAX_CONTENT_LIST_SIZE = 1_000  # Max items when content is an array
 
+# P1-011/P1-012 Web UI display/noise contract v0.1.  Keep this scoped
+# to API Server Chat Completions SSE; Responses API event schemas remain
+# untouched until a separate contract gate authorizes them.
+DISPLAY_CONTRACT_SCHEMA_VERSION = "webui-message-noise-contract-v0.1"
+DISPLAY_CONTRACT = {
+    "schema_version": DISPLAY_CONTRACT_SCHEMA_VERSION,
+    "display_hint_scope": ("api_server", "chat.completions.sse"),
+    "tool_progress_event": "hermes.tool.progress",
+    "tool_progress_visibility": "ephemeral",
+    "tool_progress_persist_to_history": False,
+    "chat_completions_delta_content": "assistant_text_only",
+    "responses_api_display_hints": False,
+}
+
 
 def _coerce_port(value: Any, default: int = DEFAULT_PORT) -> int:
     """Parse a listen port without letting malformed env/config values crash startup."""
@@ -2019,6 +2033,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     "explicit split-runtime mode is enabled."
                 ),
             },
+            "display_contract": dict(DISPLAY_CONTRACT),
             "features": {
                 "chat_completions": True,
                 "chat_completions_streaming": True,
@@ -2827,6 +2842,11 @@ class APIServerAdapter(BasePlatformAdapter):
                     "label": label,
                     "toolCallId": tool_call_id,
                     "status": "running",
+                    "schema_version": DISPLAY_CONTRACT_SCHEMA_VERSION,
+                    "event_class": "tool_progress",
+                    "visibility": "ephemeral",
+                    "persist_to_history": False,
+                    "display_hint": "tool_running",
                 }))
 
             def _on_tool_complete(tool_call_id, function_name, function_args, function_result):
@@ -2843,6 +2863,11 @@ class APIServerAdapter(BasePlatformAdapter):
                     "tool": function_name,
                     "toolCallId": tool_call_id,
                     "status": "completed",
+                    "schema_version": DISPLAY_CONTRACT_SCHEMA_VERSION,
+                    "event_class": "tool_progress",
+                    "visibility": "ephemeral",
+                    "persist_to_history": False,
+                    "display_hint": "tool_completed",
                 }))
 
             # Start agent in background.  agent_ref is a mutable container

@@ -992,6 +992,33 @@ class TestCapabilitiesEndpoint:
             assert data["endpoints"]["toolsets"] == {"method": "GET", "path": "/v1/toolsets"}
 
     @pytest.mark.asyncio
+    async def test_capabilities_advertises_display_contract(self, adapter):
+        """Web UI clients can feature-detect the v0.1 display/noise contract.
+
+        The public contract must be scoped to API Server Chat Completions SSE,
+        avoid local-path leakage, and explicitly state that Responses API SSE
+        events are not modified by this v0.1 runtime patch.
+        """
+        app = _create_app(adapter)
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.get("/v1/capabilities")
+            assert resp.status == 200
+            data = await resp.json()
+
+        contract = data["display_contract"]
+        assert contract["schema_version"] == "webui-message-noise-contract-v0.1"
+        assert contract["display_hint_scope"] == ["api_server", "chat.completions.sse"]
+        assert contract["tool_progress_event"] == "hermes.tool.progress"
+        assert contract["tool_progress_visibility"] == "ephemeral"
+        assert contract["tool_progress_persist_to_history"] is False
+        assert contract["chat_completions_delta_content"] == "assistant_text_only"
+        assert contract["responses_api_display_hints"] is False
+
+        public_payload = json.dumps(data, sort_keys=True)
+        for forbidden in ("/Users/", "/home/", "$HOME", ".ai-center", "sunJose", "sunleo"):
+            assert forbidden not in public_payload
+
+    @pytest.mark.asyncio
     async def test_capabilities_requires_auth_when_key_configured(self, auth_adapter):
         app = _create_app(auth_adapter)
         async with TestClient(TestServer(app)) as cli:
@@ -1432,9 +1459,25 @@ class TestChatCompletionsEndpoint:
                 # tool args rather than passed by the caller, so we assert
                 # only that *some* label exists rather than a literal value.
                 assert '"label":' in body
+                import json as _json
+                progress_payloads = []
+                lines = body.splitlines()
+                for i, line in enumerate(lines):
+                    if line.strip() != "event: hermes.tool.progress":
+                        continue
+                    for follow in lines[i + 1: i + 4]:
+                        if follow.startswith("data: "):
+                            progress_payloads.append(_json.loads(follow[len("data: "):]))
+                            break
+                assert progress_payloads
+                running_payload = progress_payloads[0]
+                assert running_payload["schema_version"] == "webui-message-noise-contract-v0.1"
+                assert running_payload["event_class"] == "tool_progress"
+                assert running_payload["visibility"] == "ephemeral"
+                assert running_payload["persist_to_history"] is False
+                assert running_payload["display_hint"] == "tool_running"
                 # The progress marker must NOT appear inside any
                 # chat.completion.chunk delta.content field.
-                import json as _json
                 for line in body.splitlines():
                     if line.startswith("data: ") and line.strip() != "data: [DONE]":
                         try:
@@ -1443,7 +1486,17 @@ class TestChatCompletionsEndpoint:
                             continue
                         if chunk.get("object") == "chat.completion.chunk":
                             for choice in chunk.get("choices", []):
-                                content = choice.get("delta", {}).get("content", "")
+                                delta = choice.get("delta", {})
+                                content = delta.get("content", "")
+                                for hint_key in (
+                                    "schema_version",
+                                    "event_class",
+                                    "visibility",
+                                    "persist_to_history",
+                                    "display_hint",
+                                ):
+                                    assert hint_key not in delta
+                                    assert hint_key not in content
                                 # Tool emoji markers must never leak into content
                                 assert "ls -la" not in content or content == "Here are the files."
                 # Final content must also be present
@@ -1545,11 +1598,11 @@ class TestChatCompletionsEndpoint:
                 assert resp.status == 200
                 body = await resp.text()
 
-            # Walk the SSE body and collect *(status, toolCallId)* pairs
-            # per event so the assertions verify per-event correlation —
+            # Walk the SSE body and collect *(status, toolCallId, display_hint)*
+            # triples per event so the assertions verify per-event correlation —
             # an event missing ``toolCallId`` would not pass even if a
             # different event happens to carry the right id.
-            pairs: list[tuple[str | None, str | None]] = []
+            pairs: list[tuple[str | None, str | None, str | None]] = []
             lines = body.splitlines()
             for i, line in enumerate(lines):
                 if line.strip() != "event: hermes.tool.progress":
@@ -1560,7 +1613,7 @@ class TestChatCompletionsEndpoint:
                             payload = _json.loads(follow[len("data: "):])
                         except _json.JSONDecodeError:
                             break
-                        pairs.append((payload.get("status"), payload.get("toolCallId")))
+                        pairs.append((payload.get("status"), payload.get("toolCallId"), payload.get("display_hint")))
                         break
 
             # Each tool start must emit exactly one event (no duplicate
@@ -1568,8 +1621,8 @@ class TestChatCompletionsEndpoint:
             # same toolCallId on every event — not just somewhere in the
             # aggregate.
             assert len(pairs) == 2, f"expected 2 events (running+completed), got {pairs}"
-            assert pairs[0] == ("running", "call_terminal_1"), pairs
-            assert pairs[1] == ("completed", "call_terminal_1"), pairs
+            assert pairs[0] == ("running", "call_terminal_1", "tool_running"), pairs
+            assert pairs[1] == ("completed", "call_terminal_1", "tool_completed"), pairs
 
     @pytest.mark.asyncio
     async def test_stream_tool_lifecycle_skips_internal_and_orphan_completes(self, adapter):
