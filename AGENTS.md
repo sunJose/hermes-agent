@@ -221,6 +221,19 @@ source .venv/bin/activate   # or: source venv/bin/activate
 `$HOME/.hermes/hermes-agent/venv` (for worktrees that share a venv with the
 main checkout).
 
+## Personal Runbook Index
+
+When the user says `三个管理后台都新增`, `新增站点`, `新增租户`, `新增环境配置`,
+`新管理后台`, `旧管理后台`, `game-lobby-admin`, `admin-stat`, or
+`ark-admin-cron-vue`, use
+`~/.hermes/skills/software-development/admin-tenant-site-config/SKILL.md`
+and `~/.ai-center/runbooks/admin-tenant-site-config.md` (business runbooks live
+outside this repo; do not copy them into tracked files).
+
+## Review-Gated Development Flow
+
+For named multi-step flows such as "CC闭环", use `/Users/macbook/.ai-center/config/agent-review-routing.yaml` as the single source of truth for reviewer routing, aliases, gates, and fallbacks. If this file says `cc` / Claude Code is disabled, any local mention of `cc`, `Claude`, or `Claude Code` for review means the configured replacement reviewer (currently `cr` / `codex-reviewer`). Keep the usual gated shape: plan first, review before implementation, stage review after 3-5 completed slices, and final review before delivery. High-risk actions still require Boss's explicit approval when the routing policy says so.
+
 ## Project Structure
 
 File counts shift constantly — don't treat the tree below as exhaustive.
