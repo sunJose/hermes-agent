@@ -1,14 +1,26 @@
 # Review Packet Templates
 
-These templates are the stable handoff format for CC闭环 review gates. They are intentionally small and mirror the active review routing policy. In Boss's local setup the policy is stored outside the repo, typically at `~/.ai-center/config/agent-review-routing.yaml`; keep repo docs free of private data and machine-specific absolute paths.
+These templates are the stable handoff format for CR review gates, including
+the legacy `CC闭环` command alias. They are intentionally small and mirror the
+active review routing policy. In Boss's local setup the policy is stored
+outside the repo, typically at
+`~/.ai-center/config/agent-review-routing.yaml`; keep repo docs free of private
+data and machine-specific absolute paths.
 
 ## Routing rules
 
-- Primary reviewer: cc / Claude Code.
-- Fallback reviewer: Hermes `reviewer` profile only when cc is unavailable or within the configured fallback window.
-- Any fallback review must include `needs_cc_reaudit: true` so final verification can detect whether Claude/cc still needs to re-check it.
-- High-risk operations require a cc/Claude decision first. If cc returns `uncertain`, escalate to Boss instead of proceeding.
-- Even with cc approval, git push/force-push, production changes, mass deletion, business-repo commits, and secrets operations still require Boss explicit approval.
+- Primary reviewer: `cr` / `codex-reviewer`.
+- `cc`, `Claude`, and `Claude Code` are legacy input aliases that resolve to
+  `cr`; they do not invoke Claude.
+- Fallback reviewer: Hermes `reviewer` profile only when `cr` is unavailable or
+  within the configured fallback window.
+- Any fallback review must include `needs_cr_reaudit: true` so final
+  verification can detect whether `cr` still needs to re-check it.
+- High-risk operations require a `cr` decision first. If `cr` returns
+  `uncertain`, escalate to Boss instead of proceeding.
+- Even with `cr` approval, git push/force-push, production changes, mass
+  deletion, business-repo commits, and secrets operations still require Boss
+  explicit approval.
 
 ## plan_review
 
@@ -19,7 +31,7 @@ Required fields:
 - `context_summary`: Relevant repo, branch, current dirty files, policy/config facts.
 - `implementation_plan`: Ordered implementation slices and checkpoints.
 - `acceptance_criteria`: Exact conditions required before calling the task done.
-- `risk_boundary`: Allowed actions, cc-required actions, Boss-required actions.
+- `risk_boundary`: Allowed actions, cr-required actions, Boss-required actions.
 
 Suggested prompt:
 
@@ -37,7 +49,8 @@ Required fields:
 - `changed_files`: File list with create/modify/delete markers.
 - `key_diff_summary`: Important behavior and design changes.
 - `tests_run`: Commands and results.
-- `known_risks`: Remaining risks, assumptions, fallback reviewer notes, `needs_cc_reaudit` if applicable.
+- `known_risks`: Remaining risks, assumptions, fallback reviewer notes,
+  `needs_cr_reaudit` if applicable.
 
 Suggested prompt:
 
@@ -55,12 +68,13 @@ Required fields:
 - `changed_files`: Final file list.
 - `final_diff_summary`: Final behavior summary.
 - `verification_results`: Tests, smoke checks, compile checks, review outputs.
-- `unresolved_risks`: Open issues, fallback reviews needing cc re-audit, and anything requiring Boss decision.
+- `unresolved_risks`: Open issues, fallback reviews needing `cr` re-audit, and
+  anything requiring Boss decision.
 
 Suggested prompt:
 
 ```text
-请只读终审。判断是否满足验收标准，是否存在阻塞风险，是否可以向 Boss 报告完成。若 fallback reviewer 曾介入，请确认 needs_cc_reaudit 是否已处理。
+请只读终审。判断是否满足验收标准，是否存在阻塞风险，是否可以向 Boss 报告完成。若 fallback reviewer 曾介入，请确认 needs_cr_reaudit 是否已处理。
 ```
 
 ## high_risk_review
@@ -72,7 +86,8 @@ Required fields:
 - `affected_files_or_systems`: Files, services, repos, configs, user data, or external systems affected.
 - `why_needed`: Why the action is necessary and why safer alternatives are insufficient.
 - `rollback_plan`: How to undo or recover.
-- `cc_decision_requested`: Specific yes/no/uncertain decision requested from cc.
+- `cr_decision_requested`: Specific yes/no/uncertain decision requested from
+  `cr`.
 
 Decision semantics:
 - `allow`: Hermes may proceed if the action does not also require Boss explicit approval.

@@ -230,9 +230,22 @@ When the user says `三个管理后台都新增`, `新增站点`, `新增租户`
 and `~/.ai-center/runbooks/admin-tenant-site-config.md` (business runbooks live
 outside this repo; do not copy them into tracked files).
 
+When the user says `检查上游`, `同步上游`, `升级 Hermes`, or requests a runtime
+cutover or rollback, read `/Users/macbook/.ai-center/runbooks/hermes-sync.md`
+in full before acting. That runbook is the single source of truth for the
+inspect, prepare, cutover, verification, rollback, commit, and push gates.
+
 ## Review-Gated Development Flow
 
-For named multi-step flows such as "CC闭环", use `/Users/macbook/.ai-center/config/agent-review-routing.yaml` as the single source of truth for reviewer routing, aliases, gates, and fallbacks. If this file says `cc` / Claude Code is disabled, any local mention of `cc`, `Claude`, or `Claude Code` for review means the configured replacement reviewer (currently `cr` / `codex-reviewer`). Keep the usual gated shape: plan first, review before implementation, stage review after 3-5 completed slices, and final review before delivery. High-risk actions still require Boss's explicit approval when the routing policy says so.
+For named multi-step flows such as the legacy "CC闭环" command, use
+`/Users/macbook/.ai-center/config/agent-review-routing.yaml` as the single
+source of truth for reviewer routing, aliases, gates, and fallbacks. Claude
+Code is retired from this local workflow. `cr` / `codex-reviewer` is the sole
+primary reviewer; `cc`, `Claude`, and `Claude Code` are compatibility aliases
+that always resolve to `cr` and must never invoke Claude. Keep the usual gated
+shape: plan first, review before implementation, stage review after 3-5
+completed slices, and final review before delivery. High-risk actions still
+require Boss's explicit approval when the routing policy says so.
 
 ## Project Structure
 
